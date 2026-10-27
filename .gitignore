@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Tipster tracker: local data and generated output
+.env
+tracker.db
+leaderboard.html
+picks.csv
+tracker.log
