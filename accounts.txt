@@ -1,4 +1,5 @@
-# One X handle per line (with or without @). Lines starting with # are ignored.
+# Starter list. Each run adds any handle here that isn't in the accounts table yet.
+# Removing a line doesn't stop tracking: use `python run.py accounts pause <handle>`.
 picks4dayzzz
 SharpPickss
 hammeringhankk

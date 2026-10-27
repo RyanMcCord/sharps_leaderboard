@@ -4,7 +4,7 @@ Results:
   win / loss / push   graded automatically
   void                game postponed or canceled
   manual              can't be graded automatically (player props, unmatched teams, ambiguous games)
-  NULL                still pending (game not final yet)
+  pending             game not final yet
 """
 import json
 import re
@@ -186,26 +186,48 @@ def grade_pick(pick, games_for, now=None):
     return "manual", None, f"{kind} needs manual grading"
 
 
-def grade_pending(conn):
+# Database bet types -> the grader's own names
+_TYPE_MAP = {"over_under": "total", "prop": "player_prop"}
+
+
+def to_grader(p, posted_at=None):
+    """Convert a stored pick (or parlay leg) to the shape grade_pick works with."""
+    g = {
+        "league": (p.get("sport") or "OTHER").upper(),
+        "bet_type": _TYPE_MAP.get(p.get("type"), p.get("type")),
+        "team": p.get("team"), "opponent": p.get("opponent"), "side": p.get("side"),
+        "line": p.get("point"),   # grader's "line" is the spread/total number
+        "odds": p.get("line"),    # the table's "line" is the odds
+        "units": p.get("units"),
+        "posted_at": posted_at or p.get("created_at"),
+    }
+    if p.get("legs"):
+        g["legs"] = []
+        for leg in p["legs"]:
+            lg = to_grader(leg, g["posted_at"])
+            if lg["league"] == "OTHER":  # leg didn't name a league: assume the parlay's
+                lg["league"] = g["league"]
+            g["legs"].append(lg)
+    return g
+
+
+def grade_pending(db):
+    from . import store
+
     def games_for(league, day):
         try:
-            return get_games(conn, league, day)
+            return get_games(league, day)
         except Exception as e:
             print(f"  could not load {league} scores for {day}: {e}")
             return []
 
-    rows = conn.execute("SELECT * FROM picks WHERE result IS NULL").fetchall()
+    rows = store.pending_picks(db)
     counts = {}
     for row in rows:
-        pick = dict(row)
-        result, net, note = grade_pick(pick, games_for)
+        result, net, note = grade_pick(to_grader(row), games_for)
         if result is None:
             continue
-        conn.execute(
-            "UPDATE picks SET result=?, units_net=?, note=?, graded_at=? WHERE id=?",
-            (result, net, note, datetime.now(timezone.utc).isoformat(), row["id"]),
-        )
+        store.set_result(db, row["id"], result, net, note)
         counts[result] = counts.get(result, 0) + 1
-    conn.commit()
     print(f"  graded {sum(counts.values())} of {len(rows)} pending picks {counts or ''}")
     return counts

@@ -2,8 +2,10 @@
 import json
 import re
 
-from . import config
-from .db import dumps
+from . import config, store
+
+SPORTS = ["NFL", "NCAAF", "NBA", "WNBA", "NCAAB", "MLB", "NHL", "OTHER"]
+BET_TYPES = ["moneyline", "spread", "over_under", "prop", "parlay", "teaser", "future", "other"]
 
 SYSTEM = """You read posts from sports-betting tipster accounts on X and extract the betting picks they make.
 
@@ -12,26 +14,30 @@ Rules:
   Ignore promos for paid packages, recaps of past results, hype with no specific bet, and replies to fans.
 - Read attached images too - bet slips and pick graphics often hold the actual pick.
 - Teams: use the team's common name as it would appear on a scoreboard (e.g. "Lakers", "Kansas City Chiefs", "Duke").
-- spread: `team` is the side taken, `line` is their spread (e.g. -4.5 or +3).
-- moneyline: `team` is the side taken, `line` is null.
-- total: `side` is over/under, `line` is the total, `team` and `opponent` are the two teams in the game.
-- player_prop: put the player and stat in `description`, `side` over/under, `line` the number.
-- parlay: one pick with bet_type "parlay" and each leg in `legs` (same fields as a pick). Odds = parlay odds if shown.
-- odds: American odds as an integer if stated (e.g. -110, 150), else null. Convert decimal odds to American.
+- type:
+  - moneyline: `team` is the side taken. bet_description like "Lakers moneyline".
+  - spread: `team` is the side taken, `point` is their spread (e.g. -4.5 or 3).
+  - over_under: a game total. `side` is over/under, `point` is the total, `team` and `opponent` are the two teams.
+  - prop: a player or game prop. bet_description says what it is, e.g. "Tatum over 27.5 points";
+    `side` over/under and `point` the number when there is one.
+  - parlay / teaser: one pick, with each leg in `legs` (same fields as a pick).
+  - future: season-long bets (e.g. "Chiefs to win the Super Bowl").
+- line: the odds exactly as posted, in American format, as an integer: +150 -> 150, -105 -> -105.
+  Convert decimal odds to American. Null if no odds are shown. For parlays, the parlay odds.
 - units: number of units if stated (e.g. "2u" -> 2), else null.
-- league: one of NFL, NCAAF, NBA, WNBA, NCAAB, MLB, NHL, or OTHER.
+- sport: the league, one of NFL, NCAAF, NBA, WNBA, NCAAB, MLB, NHL, or OTHER.
 - If a post has no picks, return an empty list."""
 
 PICK_PROPS = {
-    "league": {"type": "string"},
-    "bet_type": {"type": "string", "enum": ["moneyline", "spread", "total", "player_prop", "parlay", "other"]},
+    "sport": {"type": "string", "enum": SPORTS},
+    "type": {"type": "string", "enum": BET_TYPES},
+    "line": {"type": ["integer", "null"], "description": "American odds as posted"},
+    "bet_description": {"type": "string", "description": "The pick in plain words"},
     "team": {"type": ["string", "null"]},
     "opponent": {"type": ["string", "null"]},
     "side": {"type": ["string", "null"], "enum": ["over", "under", None]},
-    "line": {"type": ["number", "null"]},
-    "odds": {"type": ["integer", "null"]},
+    "point": {"type": ["number", "null"], "description": "Spread or total number"},
     "units": {"type": ["number", "null"]},
-    "description": {"type": "string", "description": "The pick in plain words, e.g. 'Lakers -4.5 vs Suns'"},
 }
 
 TOOL = {
@@ -48,7 +54,7 @@ TOOL = {
                         **PICK_PROPS,
                         "legs": {"type": "array", "items": {"type": "object", "properties": PICK_PROPS}},
                     },
-                    "required": ["league", "bet_type", "description"],
+                    "required": ["sport", "type", "bet_description"],
                 },
             }
         },
@@ -57,20 +63,44 @@ TOOL = {
 }
 
 
+def clean_pick(p):
+    """Make a parsed pick safe to store: valid enums, sensible types."""
+    sport = str(p.get("sport") or "OTHER").upper()
+    kind = str(p.get("type") or "other").lower()
+    line = p.get("line")
+    try:
+        line = int(line) if line is not None else None
+    except (TypeError, ValueError):
+        line = None
+    side = p.get("side") if p.get("side") in ("over", "under") else None
+    out = {
+        "sport": sport if sport in SPORTS else "OTHER",
+        "type": kind if kind in BET_TYPES else "other",
+        "line": line,
+        "bet_description": (p.get("bet_description") or "").strip() or "Pick",
+        "team": p.get("team") or None,
+        "opponent": p.get("opponent") or None,
+        "side": side,
+        "point": p.get("point"),
+        "units": p.get("units"),
+    }
+    if out["type"] in ("parlay", "teaser"):
+        out["legs"] = [clean_pick(leg) for leg in (p.get("legs") or [])]
+    return out
+
+
 def _client():
     import anthropic
     if not config.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
     return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
 def extract_picks(client, post):
-    content = []
-    for url in json.loads(post["media_urls"] or "[]")[:4]:
-        content.append({"type": "image", "source": {"type": "url", "url": url}})
+    content = [{"type": "image", "source": {"type": "url", "url": url}} for url in post["media_urls"][:4]]
     content.append({
         "type": "text",
-        "text": f"Account: @{post['handle']}\nPosted (UTC): {post['created_at']}\n\nPost text:\n{post['text']}",
+        "text": f"Account: @{post['x_handle']}\nPosted (UTC): {post['posted_at']}\n\nPost text:\n{post['text']}",
     })
     msg = client.messages.create(
         model=config.PARSER_MODEL,
@@ -82,7 +112,7 @@ def extract_picks(client, post):
     )
     for block in msg.content:
         if block.type == "tool_use":
-            return block.input.get("picks", [])
+            return [clean_pick(p) for p in block.input.get("picks", [])]
     return []
 
 
@@ -94,37 +124,32 @@ PICK_HINTS = re.compile(
 
 
 def might_be_pick(post):
-    if json.loads(post["media_urls"] or "[]"):
+    media = post["media_urls"]
+    if isinstance(media, str):
+        media = json.loads(media or "[]")
+    if media:
         return True  # images are often bet slips; always look
     return bool(PICK_HINTS.search(post["text"] or ""))
 
 
-def parse_pending(conn, limit=500):
-    posts = conn.execute("SELECT * FROM posts WHERE parsed=0 ORDER BY created_at LIMIT ?", (limit,)).fetchall()
+def parse_pending(db, limit=500):
+    posts = store.unparsed_posts(db, limit)
     found = skipped = 0
     client = None
     for post in posts:
         if not might_be_pick(post):
-            conn.execute("UPDATE posts SET parsed=1 WHERE id=?", (post["id"],))
+            store.mark_parsed(db, post["id"])
             skipped += 1
             continue
         client = client or _client()
         try:
             picks = extract_picks(client, post)
         except Exception as e:  # leave unparsed so the next run retries it
-            print(f"  could not parse post {post['id']}: {e}")
+            print(f"  could not read post {post['id']}: {e}")
             continue
         for p in picks:
-            conn.execute(
-                "INSERT INTO picks(post_id, handle, posted_at, league, bet_type, team, opponent, side, line, odds, units, legs, description) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (post["id"], post["handle"], post["created_at"], (p.get("league") or "OTHER").upper(), p.get("bet_type"),
-                 p.get("team"), p.get("opponent"), p.get("side"), p.get("line"), p.get("odds"), p.get("units"),
-                 dumps(p.get("legs") or []), p.get("description")),
-            )
-        conn.execute("UPDATE posts SET parsed=1 WHERE id=?", (post["id"],))
-        conn.commit()
+            store.insert_pick(db, post["sharp_account"], post["id"], post["posted_at"], p)
+        store.mark_parsed(db, post["id"])
         found += len(picks)
-    conn.commit()
     print(f"  checked {len(posts)} posts ({skipped} skipped as not picks), found {found} picks")
     return found

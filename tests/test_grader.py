@@ -4,10 +4,10 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-from tracker import db
+from unittest import mock
 from tracker.grader import grade_pick, units_net
 from tracker.parser import might_be_pick
-from tracker.report import site_data, write_site
+from tracker.report import write_site
 from tracker.results import parse_scoreboard
 
 
@@ -122,19 +122,15 @@ class GradeTests(unittest.TestCase):
 
 class ReportTests(unittest.TestCase):
     def test_site_embeds_picks_safely(self):
+        data = {"generated": "2026-10-26T21:00:00+00:00", "defaultOdds": -110, "minSample": 30,
+                "accounts": [{"h": "SharpPickss", "f": 1}],
+                "picks": [{"h": "SharpPickss", "t": POSTED, "lg": "NBA", "d": "Tricky </script><b>x</b>",
+                           "o": None, "u": 1, "r": "win", "n": 0.909, "id": "1"}]}
         tmp = tempfile.mkdtemp()
-        conn = db.connect(os.path.join(tmp, "t.db"))
-        rows = [("SharpPickss", "win", 0.909, 1, "Lakers -4.5"), ("SharpPickss", "loss", -1, 1, "Suns ML"),
-                ("salbets_", None, None, 1, "Tricky </script><b>x</b>")]
-        for i, (h, r, net, u, d) in enumerate(rows):
-            conn.execute("INSERT INTO picks(post_id, handle, posted_at, league, bet_type, description, result, units_net, units) "
-                         "VALUES (?,?,?,?,?,?,?,?,?)", (str(i), h, POSTED, "NBA", "moneyline", d, r, net, u))
-        data = site_data(conn)
-        self.assertEqual(len(data["picks"]), 3)
-        self.assertEqual({p["r"] for p in data["picks"]}, {"win", "loss", "pending"})
-        self.assertIn("SharpPickss", [a["h"] for a in data["accounts"]])
-        page = open(write_site(conn, os.path.join(tmp, "docs", "index.html")), encoding="utf-8").read()
+        with mock.patch("tracker.report.site_data", lambda db: data):
+            page = open(write_site(None, os.path.join(tmp, "docs", "index.html")), encoding="utf-8").read()
         self.assertNotIn("__DATA__", page)
+        self.assertIn("SharpPickss", page)
         self.assertEqual(page.count("</script>"), 2)  # post text can't close the data block early
 
 

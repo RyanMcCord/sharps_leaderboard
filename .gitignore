@@ -219,7 +219,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Tipster tracker: tracker.db, picks.csv and docs/ are committed on purpose,
-# so the daily GitHub run keeps its history and publishes the site.
+# Sharps leaderboard: data lives in Aurora. docs/ is committed on purpose (it's the website).
 tracker.log
+tracker.db
+picks.csv
 leaderboard.html

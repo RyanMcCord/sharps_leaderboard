@@ -1,7 +1,4 @@
 """Final scores from ESPN's public scoreboard JSON (unofficial, no key needed)."""
-import json
-from datetime import datetime, timezone
-
 import requests
 
 from . import config
@@ -39,22 +36,18 @@ def parse_scoreboard(data):
     return games
 
 
-def get_games(conn, league, date_str):
-    """Games for a league on a YYYYMMDD date. Days whose games are all final are cached."""
+_cache = {}
+
+
+def get_games(league, date_str):
+    """Games for a league on a YYYYMMDD date (fetched once per run)."""
     path = config.LEAGUES.get(league)
     if not path:
         return []
-    row = conn.execute("SELECT data FROM scoreboards WHERE league=? AND date=?", (league, date_str)).fetchone()
-    if row:
-        return json.loads(row["data"])
-    params = {"dates": date_str, "limit": 500, **EXTRA_PARAMS.get(league, {})}
-    r = requests.get(ESPN.format(path=path), params=params, timeout=30)
-    r.raise_for_status()
-    games = parse_scoreboard(r.json())
-    if games and all(g["completed"] or "POSTPONED" in g["state"] or "CANCELED" in g["state"] for g in games):
-        conn.execute(
-            "INSERT OR REPLACE INTO scoreboards(league, date, data, fetched_at) VALUES (?,?,?,?)",
-            (league, date_str, json.dumps(games), datetime.now(timezone.utc).isoformat()),
-        )
-        conn.commit()
-    return games
+    key = (league, date_str)
+    if key not in _cache:
+        params = {"dates": date_str, "limit": 500, **EXTRA_PARAMS.get(league, {})}
+        r = requests.get(ESPN.format(path=path), params=params, timeout=30)
+        r.raise_for_status()
+        _cache[key] = parse_scoreboard(r.json())
+    return _cache[key]

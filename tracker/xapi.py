@@ -7,8 +7,7 @@ import time
 
 import requests
 
-from . import config
-from .db import dumps
+from . import config, store
 
 API = "https://api.x.com/2"
 
@@ -37,44 +36,36 @@ def _get(path, params):
     raise XAPIError("Gave up after repeated rate limiting.")
 
 
-def resolve_accounts(conn, handles):
-    """Look up user IDs for handles we haven't seen yet (one paid user read each, once)."""
-    known = {row["handle"].lower() for row in conn.execute("SELECT handle FROM accounts WHERE user_id IS NOT NULL")}
-    missing = [h for h in handles if h.lower() not in known]
+def resolve_accounts(db, accounts):
+    """Look up X user IDs for accounts we haven't resolved yet (one paid user read each, once)."""
+    missing = [a["x_handle"] for a in accounts if not a["x_user_id"]]
     for i in range(0, len(missing), 100):
-        batch = missing[i:i + 100]
-        data = _get("/users/by", {"usernames": ",".join(batch), "user.fields": "public_metrics"})
+        data = _get("/users/by", {"usernames": ",".join(missing[i:i + 100]), "user.fields": "public_metrics"})
         for u in data.get("data", []):
-            conn.execute(
-                "INSERT INTO accounts(handle, user_id, followers) VALUES (?,?,?) "
-                "ON CONFLICT(handle) DO UPDATE SET user_id=excluded.user_id, followers=excluded.followers",
-                (u["username"], u["id"], u.get("public_metrics", {}).get("followers_count")),
-            )
+            store.save_x_user(db, u["username"], u["id"], u.get("public_metrics", {}).get("followers_count"))
         for err in data.get("errors", []):
             print(f"  could not find account: {err.get('value') or err.get('detail')}")
-    conn.commit()
 
 
-def fetch_new_posts(conn, handles):
-    """Pull posts newer than the last one stored for each account. Returns the count of new posts."""
-    resolve_accounts(conn, handles)
-    wanted = {h.lower() for h in handles}
+def fetch_new_posts(db):
+    """Pull posts newer than the last one stored for each active account. Returns the count of new posts."""
+    resolve_accounts(db, store.list_accounts(db))
     total = 0
-    for acct in conn.execute("SELECT * FROM accounts WHERE user_id IS NOT NULL").fetchall():
-        if acct["handle"].lower() not in wanted:
+    for acct in store.list_accounts(db):
+        if not acct["x_user_id"]:
             continue
         # First run: only a small backfill. After that, room for a full day of posts
         # (you're only billed for posts actually returned, and since_id keeps it to new ones).
         params = {
-            "max_results": config.MAX_POSTS_PER_ACCOUNT if acct["last_seen_id"] else config.FIRST_RUN_POSTS,
+            "max_results": config.MAX_POSTS_PER_ACCOUNT if acct["last_seen_post_id"] else config.FIRST_RUN_POSTS,
             "exclude": "retweets",
             "tweet.fields": "created_at,attachments,referenced_tweets,note_tweet",
             "expansions": "attachments.media_keys",
             "media.fields": "url,preview_image_url,type",
         }
-        if acct["last_seen_id"]:
-            params["since_id"] = acct["last_seen_id"]
-        data = _get(f"/users/{acct['user_id']}/tweets", params)
+        if acct["last_seen_post_id"]:
+            params["since_id"] = acct["last_seen_post_id"]
+        data = _get(f"/users/{acct['x_user_id']}/tweets", params)
         media = {m["media_key"]: m for m in data.get("includes", {}).get("media", [])}
         posts = data.get("data", [])
         for p in posts:
@@ -85,14 +76,10 @@ def fetch_new_posts(conn, handles):
                 if url:
                     urls.append(url)
             text = (p.get("note_tweet") or {}).get("text") or p.get("text", "")
-            conn.execute(
-                "INSERT OR IGNORE INTO posts(id, handle, created_at, text, media_urls, raw) VALUES (?,?,?,?,?,?)",
-                (p["id"], acct["handle"], p["created_at"], text, dumps(urls), dumps(p)),
-            )
+            store.insert_post(db, p["id"], acct["id"], p["created_at"], text, urls, p)
         if posts:
             newest = data.get("meta", {}).get("newest_id") or max(posts, key=lambda p: int(p["id"]))["id"]
-            conn.execute("UPDATE accounts SET last_seen_id=? WHERE handle=?", (newest, acct["handle"]))
-        conn.commit()
-        print(f"  @{acct['handle']}: {len(posts)} new posts")
+            store.set_last_seen(db, acct["id"], newest)
+        print(f"  @{acct['x_handle']}: {len(posts)} new posts")
         total += len(posts)
     return total
