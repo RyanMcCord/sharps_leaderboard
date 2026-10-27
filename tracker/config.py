@@ -22,6 +22,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 MAX_POSTS_PER_ACCOUNT = max(5, min(100, int(os.getenv("MAX_POSTS_PER_ACCOUNT", "100"))))
 FIRST_RUN_POSTS = max(5, min(100, int(os.getenv("FIRST_RUN_POSTS", "20"))))
 DEFAULT_ODDS = int(os.getenv("DEFAULT_ODDS", "-110"))
+# Re-read each pick post once after grading to catch deleted picks (one paid read per post)
+CHECK_DELETIONS = os.getenv("CHECK_DELETIONS", "true").lower() not in ("0", "false", "no", "off")
 ACCOUNTS_FILE = ROOT / "accounts.txt"
 
 # League code -> ESPN scoreboard path

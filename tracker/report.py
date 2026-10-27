@@ -20,6 +20,7 @@ def site_data(db):
     picks = [{
         "h": p["x_handle"], "t": p["created_at"], "lg": p["sport"], "d": p["bet_description"],
         "o": p["line"], "u": p["units"], "r": p["result"], "n": p["units_net"], "id": p["post_id"],
+        "late": p["posted_before_start"] is False, "del": bool(p["deleted"]),
     } for p in store.site_picks(db)]
     return {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -42,8 +43,9 @@ def write_site(db, path):
 
 def write_csv(db, path):
     rows = store.site_picks(db)
-    cols = ["id", "x_handle", "sport", "type", "line", "bet_description", "created_at", "team", "opponent",
-            "side", "point", "units", "result", "units_net", "post_id", "note"]
+    cols = ["id", "x_handle", "sport", "type", "period", "line", "bet_description", "created_at", "team", "opponent",
+            "side", "point", "units", "result", "units_net", "game_id", "game_start", "home_team", "away_team",
+            "home_score", "away_score", "posted_before_start", "deleted", "post_id", "note"]
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(cols)

@@ -107,11 +107,42 @@ class GradeTests(unittest.TestCase):
 
     def test_parlay(self):
         legs = [{"bet_type": "moneyline", "team": "Lakers"}, {"bet_type": "spread", "team": "Celtics", "line": -2.5}]
-        r, net, _ = self.g(bet_type="parlay", legs=legs, units=1)
+        r, net, _, info = self.g(bet_type="parlay", legs=legs, units=1)
         self.assertEqual(r, "win")
         self.assertAlmostEqual(net, (1 + 100 / 110) ** 2 - 1, places=2)
+        self.assertEqual(info["start"], "2026-10-25T23:30Z")  # earliest leg
+        self.assertTrue(info["before_start"])
         legs[1]["line"] = -3.5
         self.assertEqual(self.g(bet_type="parlay", legs=legs)[0], "loss")
+
+    def test_game_is_linked(self):
+        r, net, note, game = self.g(bet_type="spread", team="Lakers", line=-6.5)
+        self.assertEqual((game["id"], game["home_team"], game["away_team"]), ("1", "Los Angeles Lakers", "Phoenix Suns"))
+        self.assertEqual((game["home_score"], game["away_score"]), (112, 105))
+        self.assertTrue(game["before_start"])
+
+    def test_late_pick_is_flagged(self):
+        late = pick(bet_type="moneyline", team="Lakers", posted_at="2026-10-26T00:30:00Z")  # an hour after tip
+        r, net, note, game = grade_pick(late, games_for, NOW)
+        self.assertEqual(r, "win")
+        self.assertFalse(game["before_start"])
+        self.assertIn("after game start", note)
+
+    def test_partial_game_bets_go_to_hand_grade(self):
+        r, net, note, game = self.g(bet_type="spread", team="Lakers", line=-3.5, period="first_half")
+        self.assertEqual(r, "manual")
+        self.assertIn("1st half", note)
+        self.assertEqual(game["id"], "1")  # still linked, so the timing check works
+        legs = [{"bet_type": "moneyline", "team": "Lakers"}, {"bet_type": "moneyline", "team": "Celtics", "period": "first_quarter"}]
+        self.assertEqual(self.g(bet_type="parlay", legs=legs)[0], "manual")
+
+    def test_db_pick_conversion(self):
+        from tracker.grader import to_grader
+        g = to_grader({"sport": "NBA", "type": "over_under", "line": -115, "point": 215.5, "side": "over", "team": "Lakers",
+                       "period": "full_game", "created_at": POSTED,
+                       "legs": [{"sport": "OTHER", "type": "moneyline", "team": "Suns"}]})
+        self.assertEqual((g["bet_type"], g["odds"], g["line"], g["league"]), ("total", -115, 215.5, "NBA"))
+        self.assertEqual(g["legs"][0]["league"], "NBA")  # leg without a league takes the parlay's
 
     def test_units(self):
         self.assertAlmostEqual(units_net("win", -110, 1), 0.909, places=3)

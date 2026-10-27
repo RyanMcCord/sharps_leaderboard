@@ -83,3 +83,34 @@ def fetch_new_posts(db):
         print(f"  @{acct['x_handle']}: {len(posts)} new posts")
         total += len(posts)
     return total
+
+
+def check_deletions(db):
+    """Re-read each pick post once, after its picks are graded, to see whether it was deleted.
+
+    Posts that still exist cost one read each; deleted ones come back as "Not Found"
+    errors. Posts from accounts that went private or were suspended aren't counted as
+    deleted. Returns the number of deleted posts found.
+    """
+    if not config.CHECK_DELETIONS:
+        print("  skipped (CHECK_DELETIONS is off)")
+        return 0
+    found = 0
+    while True:
+        ids = store.posts_to_check_for_deletion(db)
+        if not ids:
+            break
+        data = _get("/tweets", {"ids": ",".join(ids), "tweet.fields": "id"})
+        deleted = set()
+        for err in data.get("errors", []):
+            pid = err.get("value") or err.get("resource_id")
+            # "Not Found" means deleted. Other errors (account protected or suspended)
+            # mean we can't tell, so the post is marked checked but not deleted.
+            if pid in ids and "Not Found" in (err.get("title") or ""):
+                deleted.add(pid)
+        store.record_deletion_check(db, ids, deleted)
+        found += len(deleted)
+        if len(ids) < 100:
+            break
+    print(f"  {found} deleted pick posts found")
+    return found

@@ -189,7 +189,9 @@ class PostgresTests(unittest.TestCase):
         from datetime import datetime, timezone
         now = datetime(2026, 11, 1, tzinfo=timezone.utc)
         for p in pending:
-            result, net, note = grade_pick(to_grader(p), games_for, now)
+            result, net, note, game = grade_pick(to_grader(p), games_for, now)
+            if game:
+                store.set_game(self.db, p["id"], game)
             store.set_result(self.db, p["id"], result, net, note)
         results = {p["bet_description"]: (p["result"], p["units_net"]) for p in store.site_picks(self.db)}
         self.assertEqual(results["Lakers -4.5 vs Suns"], ("win", 1.818))
@@ -197,6 +199,11 @@ class PostgresTests(unittest.TestCase):
         self.assertEqual(results["Lakers ML + Suns ML"], ("loss", -1.0))
         self.assertEqual(results["LeBron over 27.5 points"][0], "manual")
         self.assertEqual(results["unknown"][0], "manual")
+        spread = [p for p in store.site_picks(self.db) if p["bet_description"] == "Lakers -4.5 vs Suns"][0]
+        self.assertEqual((spread["game_id"], spread["home_team"], spread["home_score"]), ("1", "Los Angeles Lakers", 112))
+        self.assertEqual(spread["game_start"], "2026-10-25T23:30:00Z")
+        self.assertIs(spread["posted_before_start"], True)
+        self.assertEqual(spread["period"], "full_game")
 
         # --- hand grade ---
         prop = by_desc["LeBron over 27.5 points"]
@@ -225,6 +232,59 @@ class PostgresTests(unittest.TestCase):
         store.set_active(self.db, "SharpPickss", False)
         self.assertEqual(site_data(self.db)["picks"], [])
         self.assertEqual(len(store.find_pick(self.db, prop["id"])), 1)
+
+    def test_late_and_deleted(self):
+        from tracker import xapi
+        accts = self.seed()
+        aid = accts["SharpPickss"]["id"]
+        for pid, t in [("p1", "2026-10-25T16:00:00Z"), ("p2", "2026-10-25T16:05:00Z"), ("p3", "2026-10-26T00:30:00Z"),
+                       ("p4", "2026-10-25T16:10:00Z")]:
+            store.insert_post(self.db, pid, aid, t, "x", [], {})
+        store.insert_pick(self.db, aid, "p1", "2026-10-25T16:00:00Z", {"sport": "NBA", "type": "moneyline", "team": "Lakers", "bet_description": "Lakers ML"})
+        store.insert_pick(self.db, aid, "p2", "2026-10-25T16:05:00Z", {"sport": "NBA", "type": "moneyline", "team": "Suns", "bet_description": "Suns ML"})
+        store.insert_pick(self.db, aid, "p3", "2026-10-26T00:30:00Z", {"sport": "NBA", "type": "moneyline", "team": "Lakers", "bet_description": "Lakers ML live"})
+        store.insert_pick(self.db, aid, "p4", "2026-10-25T16:10:00Z", {"sport": "NBA", "type": "spread", "team": "Lakers", "point": -3.5,
+                                                                       "period": "first_half", "bet_description": "Lakers 1H -3.5"})
+        from datetime import datetime, timezone
+        now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+        for p in store.pending_picks(self.db):
+            result, net, note, game = grade_pick(to_grader(p), games_for, now)
+            if game:
+                store.set_game(self.db, p["id"], game)
+            store.set_result(self.db, p["id"], result, net, note)
+        by = {p["bet_description"]: p for p in store.site_picks(self.db)}
+        self.assertEqual(by["Lakers 1H -3.5"]["result"], "manual")
+        self.assertEqual(by["Lakers 1H -3.5"]["period"], "first_half")
+        self.assertIs(by["Lakers ML live"]["posted_before_start"], False)
+
+        # nothing is ready to check until the grades have settled for 12 hours
+        self.assertEqual(store.posts_to_check_for_deletion(self.db), [])
+        self.db.execute("UPDATE picks SET graded_at = now() - interval '1 day'")
+        self.assertEqual(sorted(store.posts_to_check_for_deletion(self.db)), ["p1", "p2", "p3", "p4"])
+
+        seen = []
+        def fake_get(path, params):
+            seen.append(params["ids"])
+            return {"data": [{"id": "p1"}, {"id": "p4"}],
+                    "errors": [{"value": "p2", "title": "Not Found Error", "resource_type": "tweet"},
+                               {"value": "p3", "title": "Authorization Error", "resource_type": "tweet"}]}
+        with mock.patch.object(xapi, "_get", fake_get):
+            self.assertEqual(xapi.check_deletions(self.db), 1)
+            self.assertEqual(xapi.check_deletions(self.db), 0)  # each post is only checked once
+        self.assertEqual(len(seen), 1)
+        by = {p["bet_description"]: p for p in store.site_picks(self.db)}
+        self.assertTrue(by["Suns ML"]["deleted"])
+        self.assertFalse(by["Lakers ML"]["deleted"])
+        self.assertFalse(by["Lakers ML live"]["deleted"])  # unclear isn't counted as deleted
+
+        board = {r["x_handle"]: r for r in store.leaderboard(self.db)}["SharpPickss"]
+        # the live pick won but doesn't count; the deleted Suns loss still does
+        self.assertEqual((board["wins"], board["losses"], board["late_picks"], board["deleted_picks"]), (1, 1, 1, 1))
+
+        from tracker.report import site_data
+        flags = {p["d"]: (p["late"], p["del"]) for p in site_data(self.db)["picks"]}
+        self.assertEqual(flags["Lakers ML live"], (True, False))
+        self.assertEqual(flags["Suns ML"], (False, True))
 
     def test_site_paging(self):
         accts = self.seed()

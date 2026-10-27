@@ -108,7 +108,7 @@ select {
 .lg b { font: 700 16px "Barlow Condensed", sans-serif; margin-left: 6px; }
 .picks { list-style: none; margin: 0; padding: 0; }
 .picks li {
-  display: grid; grid-template-columns: 58px 1fr auto 72px 64px; gap: 12px; align-items: baseline;
+  display: grid; grid-template-columns: 58px 1fr auto auto 64px; gap: 12px; align-items: baseline;
   padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 15px;
 }
 .picks li:last-child { border-bottom: 0; }
@@ -118,6 +118,10 @@ select {
 .chip { justify-self: start; font: 600 13px "Barlow", sans-serif; padding: 1px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--mute); }
 .chip.win { color: var(--win); border-color: currentColor; }
 .chip.loss { color: var(--loss); border-color: currentColor; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip.flagged { color: var(--amber); border-color: currentColor; }
+.flag { color: var(--amber); }
+.warn { margin: 14px 0 0; color: var(--amber); font-size: 14px; }
 .net { text-align: right; font: 600 16px "Barlow Condensed", sans-serif; }
 .net.pos { color: var(--win); } .net.neg { color: var(--loss); }
 
@@ -174,7 +178,8 @@ footer p { margin: 0 0 8px; }
 
   <footer>
     <p>Units are the amount risked, so 1 unit on a -110 winner is +0.91. When a post doesn't show odds, <span id="dodds">-110</span> is assumed. ROI is units won divided by units risked.</p>
-    <p>Faded accounts have fewer than <span id="minsample">30</span> graded picks in the selected range, which is too few to read much into. Player props and other picks the tracker can't grade automatically aren't counted until they're graded by hand.</p>
+    <p>Faded accounts have fewer than <span id="minsample">30</span> graded picks in the selected range, which is too few to read much into. Player props, partial-game bets (like first-half lines) and other picks the tracker can't grade automatically aren't counted until they're graded by hand.</p>
+    <p>Picks posted after their game started are marked late and left out of the standings. Deleted picks still count: the tracker keeps a copy of every post.</p>
   </footer>
 </div>
 
@@ -206,7 +211,7 @@ footer p { margin: 0 0 8px; }
     const cutoff = state.days ? Date.now() - state.days * 864e5 : 0;
     const by = new Map();
     for (const a of DATA.accounts) by.set(a.h.toLowerCase(), {
-      h: a.h, f: a.f, w: 0, l: 0, p: 0, units: 0, risked: 0, pending: 0, manual: 0, leagues: {}, recent: [],
+      h: a.h, f: a.f, w: 0, l: 0, p: 0, units: 0, risked: 0, pending: 0, manual: 0, late: 0, del: 0, leagues: {}, recent: [],
     });
     for (const p of DATA.picks) {
       if (cutoff && Date.parse(p.t) < cutoff) continue;
@@ -214,6 +219,8 @@ footer p { margin: 0 0 8px; }
       const s = by.get(p.h.toLowerCase());
       if (!s) continue;
       if (s.recent.length < 12) s.recent.push(p);
+      if (p.del) s.del++;
+      if (p.late) { s.late++; continue; }  // posted after the game started: not counted
       if (p.r === "pending") { s.pending++; continue; }
       if (p.r === "manual") { s.manual++; continue; }
       if (!["win", "loss", "push"].includes(p.r)) continue;
@@ -261,11 +268,12 @@ footer p { margin: 0 0 8px; }
         ? `<div class="bar"><div class="fill ${s}" style="width:calc(var(--bar-scale) * ${width}%)"></div><span class="u ${s}" style="${label}">${fmtU(r.units)}</span></div>`
         : `<div class="nograde">No graded picks</div>`;
       const fol = r.f != null ? `${Number(r.f).toLocaleString()} followers` : "";
+      const flags = [r.del && `${r.del} deleted`, r.late && `${r.late} late`].filter(Boolean).join(", ");
       html += `<div class="item${open ? " open" : ""}" data-key="${esc(key)}">
         <button type="button" class="row${thin}" aria-expanded="${open}">
           <span class="rank">${r.graded ? i + 1 : ""}</span>
           <span class="who"><span class="handle">@${esc(r.h)}</span>
-            <span class="sub">${esc(fol)}</span>
+            <span class="sub">${esc(fol)}${flags ? `<span class="flag">${fol ? ", " : ""}${esc(flags)}</span>` : ""}</span>
             <span class="sub mobile">${r.w}-${r.l}-${r.p}, ${fmtPct(r.roi)} ROI</span></span>
           <span class="rec">${r.w}-${r.l}-${r.p}</span>
           <span class="pct">${fmtPct(r.winPct)}</span>
@@ -284,15 +292,19 @@ footer p { margin: 0 0 8px; }
       ? `<div class="leagues">${lgs.map(([lg, v]) => `<span class="lg">${esc(lg)} ${v.w}-${v.l}<b style="color:var(--${sign(v.units) === "pos" ? "win" : sign(v.units) === "neg" ? "loss" : "mute"})">${fmtU(v.units)}</b></span>`).join("")}</div>`
       : `<p class="sub">Nothing graded yet.</p>`;
     const extra = [r.pending && `${r.pending} waiting on results`, r.manual && `${r.manual} need a hand grade`].filter(Boolean).join(", ");
+    const warn = [
+      r.del && `${r.del} ${r.del === 1 ? "pick was" : "picks were"} deleted after posting. They still count.`,
+      r.late && `${r.late} ${r.late === 1 ? "pick was" : "picks were"} posted after the game started, so ${r.late === 1 ? "it isn't" : "they aren't"} counted.`,
+    ].filter(Boolean).map((t) => `<p class="warn">${esc(t)}</p>`).join("");
     const picks = r.recent.map((p) => {
       const n = p.n == null ? "" : fmtU(p.n);
       return `<li><span class="date">${fmtDate(p.t)}</span>
         <a href="https://x.com/${encodeURIComponent(p.h)}/status/${esc(p.id)}" target="_blank" rel="noopener">${esc(p.d || "Pick")}${p.u ? ` (${p.u}u)` : ""}</a>
         <span class="odds">${fmtOdds(p.o)}</span>
-        <span class="chip ${esc(p.r)}">${esc(p.r === "manual" ? "hand grade" : p.r)}</span>
-        <span class="net ${p.n == null ? "" : sign(p.n)}">${n}</span></li>`;
+        <span class="chips"><span class="chip ${esc(p.r)}">${esc(p.r === "manual" ? "hand grade" : p.r)}</span>${p.del ? `<span class="chip flagged">deleted</span>` : ""}${p.late ? `<span class="chip flagged">late</span>` : ""}</span>
+        <span class="net ${p.n == null || p.late ? "" : sign(p.n)}"${p.late ? ' style="color:var(--mute)" title="Not counted"' : ""}>${n}</span></li>`;
     }).join("");
-    return `<h3>By league</h3>${lgHtml}
+    return `${warn}<h3>By league</h3>${lgHtml}
       <h3>Latest picks${extra ? ` (${esc(extra)})` : ""}</h3>
       ${picks ? `<ul class="picks">${picks}</ul>` : `<p class="sub">No picks in this range.</p>`}`;
   }

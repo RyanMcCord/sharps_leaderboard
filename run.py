@@ -6,8 +6,9 @@ Daily pipeline
   python run.py fetch      pull new posts from active accounts (X API)
   python run.py parse      read picks out of new posts (Claude)
   python run.py grade      grade picks whose games are final (ESPN scores)
+  python run.py deletions  check graded pick posts once to see if the tipster deleted them (X API)
   python run.py report     rebuild the leaderboard site (docs/index.html)
-  python run.py all        setup + fetch + parse + grade + report (what the daily run does)
+  python run.py all        all of the above, in order (what the daily run does)
 
 Accounts
   python run.py accounts                    list accounts
@@ -60,6 +61,9 @@ def run_pipeline(conn, cmd):
     if cmd in ("grade", "all"):
         from tracker.grader import grade_pending
         step("Grading", lambda: grade_pending(conn))
+    if cmd in ("deletions", "all"):
+        from tracker.xapi import check_deletions
+        step("Checking for deleted posts", lambda: check_deletions(conn))
     if cmd in ("report", "all"):
         from tracker.report import write_site
         step("Building leaderboard",
@@ -99,7 +103,7 @@ def main(argv):
     cmd, args = argv[0], argv[1:]
     conn = db.connect()
 
-    if cmd in ("setup", "fetch", "parse", "grade", "report", "all"):
+    if cmd in ("setup", "fetch", "parse", "grade", "deletions", "report", "all"):
         return run_pipeline(conn, cmd)
     if cmd == "accounts":
         return accounts_cmd(conn, args)
@@ -107,12 +111,14 @@ def main(argv):
         for r in store.leaderboard(conn):
             roi = "—" if r["roi_pct"] is None else f"{r['roi_pct']:+.1f}%"
             print(f"  @{r['x_handle']:<20} {r['wins']}-{r['losses']}-{r['pushes']:<4} "
-                  f"{r['units_won']:+8.2f}u  ROI {roi:>7}  pending {r['pending']}  hand grade {r['needs_hand_grade']}")
+                  f"{r['units_won']:+8.2f}u  ROI {roi:>7}  pending {r['pending']}  hand grade {r['needs_hand_grade']}"
+                  f"  late {r['late_picks']}  deleted {r['deleted_picks']}")
         return 0
     if cmd == "review":
         rows = store.manual_picks(conn)
         for p in rows:
-            print(f"[{p['id'][:8]}] {p['created_at'][:10]} @{p['x_handle']} {p['sport']} {p['type']} | "
+            period = "" if p["period"] == "full_game" else f" ({p['period'].replace('_', ' ')})"
+            print(f"[{p['id'][:8]}] {p['created_at'][:10]} @{p['x_handle']} {p['sport']} {p['type']}{period} | "
                   f"{p['bet_description']} | odds {p['line']} units {p['units']} | {p['note'] or ''}\n"
                   f"           https://x.com/{p['x_handle']}/status/{p['post_id']}")
         print(f"{len(rows)} picks need a hand grade.")

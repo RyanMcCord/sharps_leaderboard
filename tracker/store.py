@@ -71,26 +71,28 @@ def mark_parsed(db, post_id):
 def insert_pick(db, account_id, post_id, created_at, pick):
     db.execute(
         "INSERT INTO picks (sharp_account, sport, type, line, bet_description, created_at, "
-        "post_id, team, opponent, side, point, units, legs) VALUES ("
+        "post_id, team, opponent, side, point, units, legs, period) VALUES ("
         "CAST(:acct AS uuid), CAST(:sport AS sport), CAST(:type AS bet_type), :line, :desc, CAST(:t AS timestamptz), "
-        ":post, :team, :opp, :side, :point, :units, CAST(:legs AS jsonb))",
+        ":post, :team, :opp, :side, :point, :units, CAST(:legs AS jsonb), CAST(:period AS bet_period))",
         {"acct": account_id, "sport": pick["sport"], "type": pick["type"], "line": pick.get("line"),
          "desc": pick["bet_description"], "t": created_at, "post": post_id, "team": pick.get("team"),
          "opp": pick.get("opponent"), "side": pick.get("side"), "point": pick.get("point"),
-         "units": pick.get("units"), "legs": pick.get("legs") or []})
+         "units": pick.get("units"), "legs": pick.get("legs") or [], "period": pick.get("period") or "full_game"})
 
 
 _PICK_COLS = (
     "CAST(p.id AS text) AS id, a.x_handle, CAST(p.sport AS text) AS sport, CAST(p.type AS text) AS type, p.line, "
     "p.bet_description, {created}, p.post_id, p.team, p.opponent, p.side, CAST(p.point AS float8) AS point, "
     "CAST(p.units AS float8) AS units, CAST(p.legs AS text) AS legs, CAST(p.result AS text) AS result, "
-    "CAST(p.units_net AS float8) AS units_net, p.note"
-).format(created=_iso("p.created_at"))
+    "CAST(p.units_net AS float8) AS units_net, p.note, CAST(p.period AS text) AS period, p.game_id, {start}, "
+    "p.home_team, p.away_team, CAST(p.home_score AS float8) AS home_score, CAST(p.away_score AS float8) AS away_score, "
+    "p.posted_before_start, (po.deleted_at IS NOT NULL) AS deleted"
+).format(created=_iso("p.created_at"), start=_iso("p.game_start"))
 
 
 def _picks(db, where, params=None, tail=""):
-    rows = db.query(f"SELECT {_PICK_COLS} FROM picks p JOIN accounts a ON a.id = p.sharp_account WHERE {where} {tail}",
-                    params)
+    rows = db.query(f"SELECT {_PICK_COLS} FROM picks p JOIN accounts a ON a.id = p.sharp_account "
+                    f"LEFT JOIN posts po ON po.id = p.post_id WHERE {where} {tail}", params)
     for r in rows:
         r["legs"] = json.loads(r["legs"] or "[]")
     return rows
@@ -117,6 +119,48 @@ def set_result(db, pick_id, result, units_net, note=None, by_hand=False):
         {"r": result, "n": units_net, "note": note, "hand": by_hand, "id": pick_id})
 
 
+def set_game(db, pick_id, game):
+    """Record the game a pick was matched to and whether the pick went out before it started."""
+    db.execute(
+        "UPDATE picks SET game_id = :gid, game_start = CAST(:start AS timestamptz), home_team = :home, "
+        "away_team = :away, home_score = :hs, away_score = :as_, posted_before_start = :before "
+        "WHERE id = CAST(:id AS uuid)",
+        {"gid": game.get("id"), "start": game.get("start"), "home": game.get("home_team"),
+         "away": game.get("away_team"), "hs": game.get("home_score"), "as_": game.get("away_score"),
+         "before": game.get("before_start"), "id": pick_id})
+
+
+# --- deleted posts ------------------------------------------------------------
+
+def posts_to_check_for_deletion(db, settle_hours=12, limit=100):
+    """Pick posts not checked yet, whose picks have all been graded for at least settle_hours.
+
+    Tipsters tend to delete losers soon after the result, so one check per post, a little
+    after grading, catches most deletions without paying X to re-read every post every day.
+    """
+    rows = db.query(
+        "SELECT po.id FROM posts po JOIN picks p ON p.post_id = po.id "
+        "WHERE po.deletion_checked_at IS NULL "
+        "GROUP BY po.id "
+        "HAVING bool_and(p.result <> 'pending') "
+        "AND max(p.graded_at) < now() - make_interval(hours => :h) "
+        "ORDER BY min(po.posted_at) LIMIT :n",
+        {"h": settle_hours, "n": limit})
+    return [r["id"] for r in rows]
+
+
+def record_deletion_check(db, post_ids, deleted_ids):
+    if not post_ids:
+        return
+    ids = json.dumps(list(post_ids))
+    gone = json.dumps(list(deleted_ids))
+    db.execute(
+        "UPDATE posts SET deletion_checked_at = now(), "
+        "deleted_at = CASE WHEN id IN (SELECT jsonb_array_elements_text(CAST(:gone AS jsonb))) THEN now() ELSE deleted_at END "
+        "WHERE id IN (SELECT jsonb_array_elements_text(CAST(:ids AS jsonb)))",
+        {"ids": ids, "gone": gone})
+
+
 def site_picks(db, page_size=1000):
     """Every pick for the website, newest first. Paged, because the Data API caps a response at 1 MB."""
     out, cursor = [], None
@@ -135,4 +179,5 @@ def site_picks(db, page_size=1000):
 
 def leaderboard(db):
     return db.query("SELECT x_handle, wins, losses, pushes, CAST(units_won AS float8) AS units_won, "
-                    "CAST(roi_pct AS float8) AS roi_pct, pending, needs_hand_grade FROM leaderboard")
+                    "CAST(roi_pct AS float8) AS roi_pct, pending, needs_hand_grade, late_picks, deleted_picks "
+                    "FROM leaderboard")
