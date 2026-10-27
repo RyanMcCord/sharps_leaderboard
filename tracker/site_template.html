@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sharps Leaderboard</title>
+<meta name="description" content="Who's actually making money on their free picks.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --board: #0f1d31;
+  --panel: #16283f;
+  --panel-2: #1d3352;
+  --line: #2a4466;
+  --ink: #edf1f6;
+  --mute: #8fa1ba;
+  --amber: #f2a93b;
+  --win: #3dbe7a;
+  --loss: #ec6063;
+  --focus: #f2a93b;
+  --bar-scale: 0.66; /* leaves room beside the longest bar for its label */
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --board: #e9eef5; --panel: #ffffff; --panel-2: #f3f6fa; --line: #d3dce8;
+    --ink: #12223a; --mute: #5b6d86; --amber: #a86300; --win: #17844b; --loss: #c33a3d; --focus: #a86300;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--board); color: var(--ink);
+  font: 400 16px/1.5 "Barlow", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+a { color: inherit; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 40px 16px 64px; }
+
+/* Header */
+header { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: flex-end; justify-content: space-between; }
+h1 {
+  margin: 0; font: 700 clamp(40px, 7vw, 68px)/0.95 "Barlow Condensed", sans-serif;
+  letter-spacing: -0.01em; color: var(--amber);
+}
+.lede { margin: 10px 0 0; color: var(--ink); font-size: 18px; max-width: 46ch; }
+.updated { color: var(--mute); font-size: 14px; margin: 0; }
+
+/* Controls */
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 28px 0 14px; }
+.seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.seg button {
+  font: 600 15px "Barlow", sans-serif; color: var(--mute); background: none; border: 0;
+  padding: 7px 14px; border-radius: 6px; cursor: pointer;
+}
+.seg button[aria-pressed="true"] { background: var(--panel-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
+select {
+  font: 600 15px "Barlow", sans-serif; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 34px 9px 12px; cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--mute) 50%), linear-gradient(135deg, var(--mute) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 52%, calc(100% - 12px) 52%; background-size: 5px 5px; background-repeat: no-repeat;
+}
+.summary { margin: 0 0 18px; color: var(--mute); }
+.summary strong { color: var(--ink); font-weight: 600; }
+
+/* Board */
+.board { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.cols, .row {
+  display: grid; grid-template-columns: 44px minmax(150px, 1.3fr) 92px 70px 70px minmax(200px, 2fr);
+  gap: 12px; align-items: center; padding: 0 18px;
+}
+.cols { color: var(--mute); font-size: 13px; font-weight: 500; padding-top: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.cols .zero { text-align: center; }
+.row {
+  width: 100%; min-height: 64px; background: none; border: 0; border-top: 1px solid var(--line);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.item:first-child .row { border-top: 0; }
+.row:hover { background: var(--panel-2); }
+.row.thin { opacity: 0.58; }
+.rank { font: 700 26px/1 "Barlow Condensed", sans-serif; color: var(--mute); }
+.item:first-child .rank { color: var(--amber); }
+.who { min-width: 0; }
+.handle { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub { display: block; color: var(--mute); font-size: 13px; }
+.rec, .pct { font: 600 17px "Barlow Condensed", sans-serif; letter-spacing: 0.01em; }
+.pct.pos { color: var(--win); } .pct.neg { color: var(--loss); }
+
+/* The units bar: grows left or right from the zero line */
+.bar { position: relative; height: 30px; }
+.bar::before { content: ""; position: absolute; left: 50%; top: -6px; bottom: -6px; width: 1px; background: var(--line); }
+.fill { position: absolute; top: 7px; height: 16px; border-radius: 3px; }
+.fill.pos { left: 50%; background: var(--win); }
+.fill.neg { right: 50%; background: var(--loss); }
+.u { position: absolute; top: 2px; font: 700 20px/26px "Barlow Condensed", sans-serif; white-space: nowrap; }
+.u.pos { color: var(--win); } .u.neg { color: var(--loss); } .u.flat { color: var(--mute); left: calc(50% + 8px); }
+.nograde { color: var(--mute); font-size: 14px; text-align: center; }
+
+/* Drill-down */
+.detail { display: none; padding: 4px 18px 20px 74px; border-top: 1px dashed var(--line); background: var(--panel-2); }
+.item.open .detail { display: block; }
+.item.open .row { background: var(--panel-2); }
+.detail h3 { font: 600 14px "Barlow", sans-serif; color: var(--mute); margin: 16px 0 8px; }
+.leagues { display: flex; flex-wrap: wrap; gap: 8px; }
+.lg { border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font-size: 14px; background: var(--panel); }
+.lg b { font: 700 16px "Barlow Condensed", sans-serif; margin-left: 6px; }
+.picks { list-style: none; margin: 0; padding: 0; }
+.picks li {
+  display: grid; grid-template-columns: 58px 1fr auto 72px 64px; gap: 12px; align-items: baseline;
+  padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 15px;
+}
+.picks li:last-child { border-bottom: 0; }
+.picks .date, .picks .odds { color: var(--mute); }
+.picks a { text-decoration: none; }
+.picks a:hover { text-decoration: underline; }
+.chip { justify-self: start; font: 600 13px "Barlow", sans-serif; padding: 1px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--mute); }
+.chip.win { color: var(--win); border-color: currentColor; }
+.chip.loss { color: var(--loss); border-color: currentColor; }
+.net { text-align: right; font: 600 16px "Barlow Condensed", sans-serif; }
+.net.pos { color: var(--win); } .net.neg { color: var(--loss); }
+
+.empty { padding: 48px 24px; text-align: center; color: var(--mute); }
+.empty strong { display: block; color: var(--ink); font-size: 18px; margin-bottom: 4px; }
+
+footer { margin-top: 28px; color: var(--mute); font-size: 14px; max-width: 72ch; }
+footer p { margin: 0 0 8px; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.row:focus-visible { outline-offset: -2px; }
+
+@media (max-width: 720px) {
+  .wrap { padding-top: 28px; }
+  .cols { display: none; }
+  .row { grid-template-columns: 30px minmax(0, 1fr); gap: 6px 10px; padding: 12px 14px 10px; }
+  .rec, .pct { display: none; }
+  .row .bar, .row .nograde { grid-column: 1 / -1; }
+  :root { --bar-scale: 0.48; }
+  .row .nograde { text-align: left; padding-left: 40px; }
+  .row .sub.mobile { display: block; }
+  .detail { padding: 4px 14px 18px; }
+  .picks li { grid-template-columns: 1fr auto 58px; }
+  .picks .date, .picks .odds { display: none; }
+}
+.sub.mobile { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .fill { transition: width 280ms ease-out; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Sharps Leaderboard</h1>
+      <p class="lede">Who's actually making money on their free picks.</p>
+    </div>
+    <p class="updated" id="updated"></p>
+  </header>
+
+  <div class="controls">
+    <div class="seg" role="group" aria-label="Time range" id="range">
+      <button type="button" data-days="0" aria-pressed="true">All time</button>
+      <button type="button" data-days="30" aria-pressed="false">30 days</button>
+      <button type="button" data-days="7" aria-pressed="false">7 days</button>
+    </div>
+    <select id="league" aria-label="League"><option value="">All leagues</option></select>
+  </div>
+
+  <p class="summary" id="summary"></p>
+
+  <div class="board" id="board" aria-live="polite"></div>
+
+  <footer>
+    <p>Units are the amount risked, so 1 unit on a -110 winner is +0.91. When a post doesn't show odds, <span id="dodds">-110</span> is assumed. ROI is units won divided by units risked.</p>
+    <p>Faded accounts have fewer than <span id="minsample">30</span> graded picks in the selected range, which is too few to read much into. Player props and other picks the tracker can't grade automatically aren't counted until they're graded by hand.</p>
+  </footer>
+</div>
+
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const state = { days: 0, league: "", open: new Set() };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtU = (u) => (u > 0 ? "+" : u < 0 ? "−" : "") + Math.abs(u).toFixed(2) + "u";
+  const fmtPct = (x) => (x == null ? "—" : (x * 100).toFixed(1) + "%");
+  const fmtOdds = (o) => (o == null ? "" : o > 0 ? "+" + o : String(o));
+  const sign = (x) => (x > 0.0001 ? "pos" : x < -0.0001 ? "neg" : "flat");
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  $("dodds").textContent = fmtOdds(DATA.defaultOdds);
+  $("minsample").textContent = DATA.minSample;
+  $("updated").textContent = "Updated " + new Date(DATA.generated).toLocaleString(undefined,
+    { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+  const leagues = [...new Set(DATA.picks.map((p) => p.lg).filter(Boolean))].sort();
+  for (const lg of leagues) {
+    const o = document.createElement("option");
+    o.value = lg; o.textContent = lg; $("league").appendChild(o);
+  }
+
+  function standings() {
+    const cutoff = state.days ? Date.now() - state.days * 864e5 : 0;
+    const by = new Map();
+    for (const a of DATA.accounts) by.set(a.h.toLowerCase(), {
+      h: a.h, f: a.f, w: 0, l: 0, p: 0, units: 0, risked: 0, pending: 0, manual: 0, leagues: {}, recent: [],
+    });
+    for (const p of DATA.picks) {
+      if (cutoff && Date.parse(p.t) < cutoff) continue;
+      if (state.league && p.lg !== state.league) continue;
+      const s = by.get(p.h.toLowerCase());
+      if (!s) continue;
+      if (s.recent.length < 12) s.recent.push(p);
+      if (p.r === "pending") { s.pending++; continue; }
+      if (p.r === "manual") { s.manual++; continue; }
+      if (!["win", "loss", "push"].includes(p.r)) continue;
+      s[p.r[0]]++;
+      s.units += p.n || 0;
+      if (p.r !== "push") s.risked += p.u || 1;
+      const lg = (s.leagues[p.lg] ||= { w: 0, l: 0, units: 0 });
+      if (p.r === "win") lg.w++; if (p.r === "loss") lg.l++;
+      lg.units += p.n || 0;
+    }
+    const rows = [...by.values()].map((s) => ({
+      ...s, graded: s.w + s.l + s.p,
+      winPct: s.w + s.l ? s.w / (s.w + s.l) : null,
+      roi: s.risked ? s.units / s.risked : null,
+    }));
+    rows.sort((a, b) => (b.graded > 0) - (a.graded > 0) || b.units - a.units || b.graded - a.graded);
+    return rows;
+  }
+
+  function render() {
+    const rows = standings();
+    const graded = rows.reduce((n, r) => n + r.graded, 0);
+    const up = rows.filter((r) => r.graded && r.units > 0).length;
+    const scope = (state.league ? state.league + " " : "") + (state.days ? `picks in the last ${state.days} days` : "picks");
+    $("summary").innerHTML = graded
+      ? `<strong>${graded.toLocaleString()}</strong> graded ${esc(scope)} across ${rows.filter((r) => r.graded).length} accounts. `
+        + `<strong>${up}</strong> ${up === 1 ? "is" : "are"} in profit.`
+      : "";
+
+    if (!graded) {
+      $("board").innerHTML = `<div class="empty"><strong>No graded picks ${state.days || state.league ? "for this filter" : "yet"}</strong>`
+        + (state.days || state.league ? "Try a longer time range or all leagues." : "Standings appear once the daily update has graded a few games.") + `</div>`;
+      return;
+    }
+    const max = Math.max(1, ...rows.map((r) => Math.abs(r.units)));
+    let html = `<div class="cols" aria-hidden="true"><span>#</span><span>Account</span><span>Record</span><span>Win %</span><span>ROI</span><span class="zero">Units won</span></div>`;
+    rows.forEach((r, i) => {
+      const key = r.h.toLowerCase();
+      const open = state.open.has(key);
+      const thin = r.graded < DATA.minSample ? " thin" : "";
+      const s = sign(r.units);
+      const width = (Math.abs(r.units) / max) * 50;  // % of half the bar area, scaled down by --bar-scale in CSS
+      const label = s === "pos" ? `left:calc(50% + var(--bar-scale) * ${width}% + 8px)` : s === "neg" ? `right:calc(50% + var(--bar-scale) * ${width}% + 8px)` : "";
+      const bar = r.graded
+        ? `<div class="bar"><div class="fill ${s}" style="width:calc(var(--bar-scale) * ${width}%)"></div><span class="u ${s}" style="${label}">${fmtU(r.units)}</span></div>`
+        : `<div class="nograde">No graded picks</div>`;
+      const fol = r.f != null ? `${Number(r.f).toLocaleString()} followers` : "";
+      html += `<div class="item${open ? " open" : ""}" data-key="${esc(key)}">
+        <button type="button" class="row${thin}" aria-expanded="${open}">
+          <span class="rank">${r.graded ? i + 1 : ""}</span>
+          <span class="who"><span class="handle">@${esc(r.h)}</span>
+            <span class="sub">${esc(fol)}</span>
+            <span class="sub mobile">${r.w}-${r.l}-${r.p}, ${fmtPct(r.roi)} ROI</span></span>
+          <span class="rec">${r.w}-${r.l}-${r.p}</span>
+          <span class="pct">${fmtPct(r.winPct)}</span>
+          <span class="pct ${sign(r.roi || 0)}">${fmtPct(r.roi)}</span>
+          ${bar}
+        </button>
+        <div class="detail">${open ? detail(r) : ""}</div>
+      </div>`;
+    });
+    $("board").innerHTML = html;
+  }
+
+  function detail(r) {
+    const lgs = Object.entries(r.leagues).sort((a, b) => b[1].units - a[1].units);
+    const lgHtml = lgs.length
+      ? `<div class="leagues">${lgs.map(([lg, v]) => `<span class="lg">${esc(lg)} ${v.w}-${v.l}<b style="color:var(--${sign(v.units) === "pos" ? "win" : sign(v.units) === "neg" ? "loss" : "mute"})">${fmtU(v.units)}</b></span>`).join("")}</div>`
+      : `<p class="sub">Nothing graded yet.</p>`;
+    const extra = [r.pending && `${r.pending} waiting on results`, r.manual && `${r.manual} need a hand grade`].filter(Boolean).join(", ");
+    const picks = r.recent.map((p) => {
+      const n = p.n == null ? "" : fmtU(p.n);
+      return `<li><span class="date">${fmtDate(p.t)}</span>
+        <a href="https://x.com/${encodeURIComponent(p.h)}/status/${esc(p.id)}" target="_blank" rel="noopener">${esc(p.d || "Pick")}${p.u ? ` (${p.u}u)` : ""}</a>
+        <span class="odds">${fmtOdds(p.o)}</span>
+        <span class="chip ${esc(p.r)}">${esc(p.r === "manual" ? "hand grade" : p.r)}</span>
+        <span class="net ${p.n == null ? "" : sign(p.n)}">${n}</span></li>`;
+    }).join("");
+    return `<h3>By league</h3>${lgHtml}
+      <h3>Latest picks${extra ? ` (${esc(extra)})` : ""}</h3>
+      ${picks ? `<ul class="picks">${picks}</ul>` : `<p class="sub">No picks in this range.</p>`}`;
+  }
+
+  $("range").addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    state.days = Number(b.dataset.days);
+    for (const x of $("range").querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+    render();
+  });
+  $("league").addEventListener("change", (e) => { state.league = e.target.value; render(); });
+  $("board").addEventListener("click", (e) => {
+    if (e.target.closest("a")) return;
+    const row = e.target.closest(".row"); if (!row) return;
+    const key = row.parentElement.dataset.key;
+    state.open.has(key) ? state.open.delete(key) : state.open.add(key);
+    render();
+    const again = document.querySelector(`.item[data-key="${CSS.escape(key)}"] .row`);
+    if (again) again.focus();
+  });
+  render();
+})();
+</script>
+</body>
+</html>

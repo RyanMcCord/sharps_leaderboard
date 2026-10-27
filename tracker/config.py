@@ -13,7 +13,8 @@ X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PARSER_MODEL = os.getenv("PARSER_MODEL", "claude-sonnet-5-5")
 DB_PATH = os.getenv("DB_PATH", str(ROOT / "tracker.db"))
-MAX_POSTS_PER_ACCOUNT = max(5, min(100, int(os.getenv("MAX_POSTS_PER_ACCOUNT", "20"))))
+MAX_POSTS_PER_ACCOUNT = max(5, min(100, int(os.getenv("MAX_POSTS_PER_ACCOUNT", "100"))))
+FIRST_RUN_POSTS = max(5, min(100, int(os.getenv("FIRST_RUN_POSTS", "20"))))
 DEFAULT_ODDS = int(os.getenv("DEFAULT_ODDS", "-110"))
 ACCOUNTS_FILE = ROOT / "accounts.txt"
 

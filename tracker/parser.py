@@ -1,5 +1,6 @@
 """Turn raw posts (text + bet-slip images) into structured picks with Claude."""
 import json
+import re
 
 from . import config
 from .db import dumps
@@ -85,11 +86,29 @@ def extract_picks(client, post):
     return []
 
 
-def parse_pending(conn, limit=200):
-    client = _client()
+# Cheap pre-check so obvious non-picks ("good morning fam", "link in bio") never cost an API call.
+PICK_HINTS = re.compile(
+    r"[+-]\s?\d|\b[ou]\s?\d|\d\s?u\b|\bml\b|\bover\b|\bunder\b|\bpk\b|\bpick|\block|\bparlay|\bspread|\bplay\b|\bbet\b|\bvs\.?\b|\s@\s",
+    re.IGNORECASE,
+)
+
+
+def might_be_pick(post):
+    if json.loads(post["media_urls"] or "[]"):
+        return True  # images are often bet slips; always look
+    return bool(PICK_HINTS.search(post["text"] or ""))
+
+
+def parse_pending(conn, limit=500):
     posts = conn.execute("SELECT * FROM posts WHERE parsed=0 ORDER BY created_at LIMIT ?", (limit,)).fetchall()
-    found = 0
+    found = skipped = 0
+    client = None
     for post in posts:
+        if not might_be_pick(post):
+            conn.execute("UPDATE posts SET parsed=1 WHERE id=?", (post["id"],))
+            skipped += 1
+            continue
+        client = client or _client()
         try:
             picks = extract_picks(client, post)
         except Exception as e:  # leave unparsed so the next run retries it
@@ -106,5 +125,6 @@ def parse_pending(conn, limit=200):
         conn.execute("UPDATE posts SET parsed=1 WHERE id=?", (post["id"],))
         conn.commit()
         found += len(picks)
-    print(f"  parsed {len(posts)} posts, found {found} picks")
+    conn.commit()
+    print(f"  checked {len(posts)} posts ({skipped} skipped as not picks), found {found} picks")
     return found

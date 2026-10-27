@@ -4,7 +4,7 @@
   python run.py fetch      pull new posts from the tracked accounts (X API)
   python run.py parse      extract picks from new posts (Claude)
   python run.py grade      grade picks whose games are final (ESPN scores)
-  python run.py report     write leaderboard.html and picks.csv
+  python run.py report     build the leaderboard site (docs/index.html) and picks.csv
   python run.py all        fetch + parse + grade + report (what the schedule runs)
 
   python run.py review                 list picks that need a manual grade
@@ -24,26 +24,41 @@ def main(argv):
         return 0
     cmd = argv[0]
     conn = db.connect()
+    failed = []
+
+    def step(name, fn):
+        # In "all", one step failing (say, X credits ran out) shouldn't stop
+        # grading and the page from updating with what we already have.
+        print(f"{name}...")
+        try:
+            fn()
+        except Exception as e:
+            print(f"  {name} failed: {e}")
+            failed.append(name)
+            if cmd != "all":
+                raise
 
     if cmd in ("fetch", "all"):
         from tracker.xapi import fetch_new_posts
-        print("Fetching posts...")
-        fetch_new_posts(conn, config.load_handles())
+        step("Fetching posts", lambda: fetch_new_posts(conn, config.load_handles()))
     if cmd in ("parse", "all"):
         from tracker.parser import parse_pending
-        print("Parsing picks...")
-        parse_pending(conn)
+        step("Reading picks", lambda: parse_pending(conn))
     if cmd in ("grade", "all"):
         from tracker.grader import grade_pending
-        print("Grading...")
-        grade_pending(conn)
+        step("Grading", lambda: grade_pending(conn))
     if cmd in ("report", "all"):
-        from tracker.report import write_csv, write_html
-        html_path = write_html(conn, config.ROOT / "leaderboard.html")
-        write_csv(conn, config.ROOT / "picks.csv")
-        print(f"Wrote {html_path}")
+        from tracker.report import write_csv, write_site
+        def report():
+            path = write_site(conn, config.ROOT / "docs" / "index.html")
+            write_csv(conn, config.ROOT / "picks.csv")
+            print(f"  wrote {path}")
+        step("Building leaderboard", report)
+    if failed:
+        print(f"Finished with errors in: {', '.join(failed)}")
+        return 1
 
-    elif cmd == "review":
+    if cmd == "review":
         rows = conn.execute("SELECT * FROM picks WHERE result='manual' ORDER BY posted_at").fetchall()
         for p in rows:
             print(f"[{p['id']}] {p['posted_at'][:10]} @{p['handle']} {p['league']} | {p['description']} "

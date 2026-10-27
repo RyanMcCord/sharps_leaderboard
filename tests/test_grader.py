@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 
 from tracker import db
 from tracker.grader import grade_pick, units_net
-from tracker.report import leaderboard, write_html
+from tracker.parser import might_be_pick
+from tracker.report import site_data, write_site
 from tracker.results import parse_scoreboard
 
 
@@ -120,21 +121,37 @@ class GradeTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
-    def test_leaderboard_and_html(self):
+    def test_site_embeds_picks_safely(self):
         tmp = tempfile.mkdtemp()
         conn = db.connect(os.path.join(tmp, "t.db"))
-        rows = [("a", "win", 0.909, 1), ("a", "win", 0.909, 1), ("a", "loss", -1, 1),
-                ("b", "loss", -2, 2), ("b", "push", 0, 1), ("b", None, None, 1)]
-        for i, (h, r, net, u) in enumerate(rows):
+        rows = [("SharpPickss", "win", 0.909, 1, "Lakers -4.5"), ("SharpPickss", "loss", -1, 1, "Suns ML"),
+                ("salbets_", None, None, 1, "Tricky </script><b>x</b>")]
+        for i, (h, r, net, u, d) in enumerate(rows):
             conn.execute("INSERT INTO picks(post_id, handle, posted_at, league, bet_type, description, result, units_net, units) "
-                         "VALUES (?,?,?,?,?,?,?,?,?)", (str(i), h, POSTED, "NBA", "moneyline", "x", r, net, u))
-        board = leaderboard(conn)
-        self.assertEqual(board[0]["handle"], "a")
-        self.assertAlmostEqual(board[0]["units"], 0.818, places=3)
-        self.assertAlmostEqual(board[0]["roi"], 0.818 / 3, places=3)
-        self.assertEqual((board[1]["loss"], board[1]["push"], board[1]["pending"]), (1, 1, 1))
-        path = write_html(conn, os.path.join(tmp, "lb.html"))
-        self.assertIn("@a", open(path).read())
+                         "VALUES (?,?,?,?,?,?,?,?,?)", (str(i), h, POSTED, "NBA", "moneyline", d, r, net, u))
+        data = site_data(conn)
+        self.assertEqual(len(data["picks"]), 3)
+        self.assertEqual({p["r"] for p in data["picks"]}, {"win", "loss", "pending"})
+        self.assertIn("SharpPickss", [a["h"] for a in data["accounts"]])
+        page = open(write_site(conn, os.path.join(tmp, "docs", "index.html")), encoding="utf-8").read()
+        self.assertNotIn("__DATA__", page)
+        self.assertEqual(page.count("</script>"), 2)  # post text can't close the data block early
+
+
+class PrefilterTests(unittest.TestCase):
+    def post(self, text, media="[]"):
+        return {"text": text, "media_urls": media}
+
+    def test_obvious_non_picks_are_skipped(self):
+        self.assertFalse(might_be_pick(self.post("Good morning fam, big day today")))
+        self.assertFalse(might_be_pick(self.post("Join the VIP, link in bio")))
+
+    def test_picks_get_through(self):
+        for t in ["Lakers -4.5 (2u)", "LeBron o27.5 pts", "Chiefs ML", "Over 47 KC/LV", "Duke vs UNC under", "3u play: Celtics"]:
+            self.assertTrue(might_be_pick(self.post(t)), t)
+
+    def test_images_always_checked(self):
+        self.assertTrue(might_be_pick(self.post("🔒🔒", '["https://pbs.twimg.com/x.jpg"]')))
 
 
 if __name__ == "__main__":

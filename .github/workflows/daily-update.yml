@@ -1,0 +1,57 @@
+name: Daily update
+
+# Once a day: fetch new posts, read picks, grade finished games, rebuild the site.
+# 21:07 UTC is 5:07 PM Eastern in summer (4:07 PM in winter): after the previous
+# night's games are final, and before most of tonight's games start.
+on:
+  schedule:
+    - cron: "7 21 * * *"
+  workflow_dispatch: {}   # adds a "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run the tracker
+        id: run
+        continue-on-error: true   # still save whatever finished, then fail the job below
+        env:
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python run.py all
+
+      - name: Save results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tracker.db picks.csv docs/index.html
+          if git diff --cached --quiet; then
+            echo "Nothing changed."
+          else
+            git commit -m "Daily update $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Report a failed run
+        if: steps.run.outcome == 'failure'
+        run: |
+          echo "::error::Part of the tracker run failed. Open the 'Run the tracker' step above for the reason."
+          exit 1

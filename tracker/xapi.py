@@ -63,8 +63,10 @@ def fetch_new_posts(conn, handles):
     for acct in conn.execute("SELECT * FROM accounts WHERE user_id IS NOT NULL").fetchall():
         if acct["handle"].lower() not in wanted:
             continue
+        # First run: only a small backfill. After that, room for a full day of posts
+        # (you're only billed for posts actually returned, and since_id keeps it to new ones).
         params = {
-            "max_results": config.MAX_POSTS_PER_ACCOUNT,
+            "max_results": config.MAX_POSTS_PER_ACCOUNT if acct["last_seen_id"] else config.FIRST_RUN_POSTS,
             "exclude": "retweets",
             "tweet.fields": "created_at,attachments,referenced_tweets,note_tweet",
             "expansions": "attachments.media_keys",

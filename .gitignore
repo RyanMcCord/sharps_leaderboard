@@ -219,9 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Tipster tracker: local data and generated output
-.env
-tracker.db
-leaderboard.html
-picks.csv
+# Tipster tracker: tracker.db, picks.csv and docs/ are committed on purpose,
+# so the daily GitHub run keeps its history and publishes the site.
 tracker.log
+leaderboard.html
