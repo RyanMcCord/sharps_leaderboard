@@ -10,7 +10,8 @@ on:
   workflow_dispatch: {}   # adds a "Run workflow" button on the Actions tab
 
 permissions:
-  contents: write
+  contents: write   # commit the rebuilt site
+  id-token: write   # sign in to AWS with GitHub's identity token, so no AWS keys are stored here
 
 concurrency:
   group: daily-update
@@ -31,18 +32,21 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
 
+      # AWS trusts this repo's main branch (see README: step 3) and hands back
+      # credentials that expire after the run. Nothing secret is stored in GitHub.
+      - name: Sign in to AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: sharps-leaderboard-daily
+
       - name: Run the tracker
         id: run
         continue-on-error: true   # still save whatever finished, then fail the job below
         env:
-          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          DB_CLUSTER_ARN: ${{ secrets.DB_CLUSTER_ARN }}
-          DB_SECRET_ARN: ${{ secrets.DB_SECRET_ARN }}
-          DB_NAME: ${{ secrets.DB_NAME || 'sharps' }}
+          # The X token, Anthropic key and database ARNs are read from this secret at startup
+          APP_SECRET_ID: ${{ vars.APP_SECRET_ID || 'sharps-leaderboard/app' }}
         run: python run.py all
 
       - name: Save results

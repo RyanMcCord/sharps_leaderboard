@@ -101,6 +101,9 @@ def main(argv):
         print(__doc__)
         return 0
     cmd, args = argv[0], argv[1:]
+    loaded = config.load_secrets()
+    if loaded:
+        print(f"Loaded {len(loaded)} keys from AWS Secrets Manager ({config.APP_SECRET_ID}).")
     conn = db.connect()
 
     if cmd in ("setup", "fetch", "parse", "grade", "deletions", "report", "all"):

@@ -6,11 +6,11 @@ Tracks the free picks that sports-betting accounts post on X and grades them aga
 X API (posts + bet-slip images) → Claude (read picks) → Aurora Postgres (store) → ESPN scores (grade) → leaderboard site
 ```
 
-The daily job runs on GitHub's servers. The data lives in an Aurora Serverless Postgres database in your AWS account, which pauses itself when idle, so you only pay for the few minutes a day it's awake. Visitors to the site never touch the database: the daily job queries it once and bakes the results into the page.
+The daily job runs on GitHub's servers and signs in to your AWS account without stored keys. Its X and Anthropic keys live in AWS Secrets Manager, and the data lives in an Aurora Serverless Postgres database, which pauses itself when idle, so you only pay for the few minutes a day it's awake. Visitors to the site never touch the database: the daily job queries it once and bakes the results into the page.
 
 ## Setup
 
-You'll need about 30 minutes. Steps 1–4 happen in the AWS console and step 5 in GitHub. Pick one AWS region and use it throughout. The steps below assume **us-east-1 (N. Virginia)**.
+You'll need about 30 minutes. Steps 1–5 happen in the AWS console and step 6 in GitHub. Pick one AWS region and use it throughout. The steps below assume **us-east-1 (N. Virginia)**.
 
 ### 1. Create the database
 
@@ -32,19 +32,49 @@ When it's ready, open the cluster (`sharps-leaderboard`, not the instance under 
 
 ### 2. Store the database password in Secrets Manager
 
-The Data API reads the password from Secrets Manager, so it's never in GitHub.
+The Data API reads the database password from Secrets Manager.
 
 1. Open **Secrets Manager → Store a new secret**.
 2. Choose **Credentials for Amazon RDS database**. Enter `postgres` and the password from step 1, then select the `sharps-leaderboard` database.
 3. Name it `sharps-leaderboard/db` and store it.
 4. Open the secret and copy its **Secret ARN**. This is your `DB_SECRET_ARN`.
 
-### 3. Create a limited AWS user for the daily job
+### 3. Get the X and Anthropic keys
 
-This user can run SQL on this one database and read this one password, nothing else.
+- **X:** sign in at developer.x.com, create a project and an app, and add credits. Copy the app's **Bearer Token**.
+- **Anthropic:** create an API key at console.anthropic.com. It's used to read picks out of post text and bet-slip images.
 
-1. Open **IAM → Users → Create user** and name it `sharps-leaderboard-bot`. Don't give it console access, and skip permissions for now.
-2. Open the new user, then choose **Add permissions → Create inline policy**. Switch to **JSON** and paste this, replacing the two ARNs with yours:
+### 4. Store the app's keys in Secrets Manager
+
+Every key the service needs lives in one secret. The daily job reads it when it starts, so no key is ever stored in GitHub or in this repo.
+
+1. Open **Secrets Manager → Store a new secret** and choose **Other type of secret**.
+2. Under **Key/value pairs**, add these four rows:
+
+   | Key | Value |
+   |---|---|
+   | `X_BEARER_TOKEN` | X bearer token |
+   | `ANTHROPIC_API_KEY` | Anthropic API key |
+   | `DB_CLUSTER_ARN` | from step 1 |
+   | `DB_SECRET_ARN` | from step 2 |
+
+3. Name it `sharps-leaderboard/app` and store it. Leave automatic rotation off.
+4. Open the secret and copy its **Secret ARN** for the next step.
+
+**Changing a key later:** open this secret, choose **Retrieve secret value → Edit**, and save. The next run uses the new value, and nothing in GitHub needs to change.
+
+### 5. Let GitHub sign in to AWS
+
+Instead of storing AWS access keys in GitHub, you tell AWS to trust this repository. Each run, GitHub proves which repo and branch it's running from, and AWS hands back credentials that expire when the run ends.
+
+1. **Trust GitHub as a sign-in provider.** Open **IAM → Identity providers → Add provider** and choose **OpenID Connect**. Set *Provider URL* to `https://token.actions.githubusercontent.com` and *Audience* to `sts.amazonaws.com`, then add it. You only ever do this once per AWS account.
+2. **Create a role for the daily job.** Open **IAM → Roles → Create role** and choose **Web identity**. Pick the `token.actions.githubusercontent.com` provider and the `sts.amazonaws.com` audience. Set *GitHub organization* to `RyanMcCord`, *GitHub repository* to `sharps_leaderboard`, and *GitHub branch* to `main`. Skip adding permissions, name the role `sharps-leaderboard-github`, and create it.
+
+   Only runs from this repo's `main` branch can use the role. Forks and other repos can't. To check, open the role's **Trust relationships** tab. The condition should read:
+   ```json
+   "token.actions.githubusercontent.com:sub": "repo:RyanMcCord/sharps_leaderboard:ref:refs/heads/main"
+   ```
+3. **Give the role only what it needs.** On the role, choose **Add permissions → Create inline policy**, switch to **JSON**, and paste this, replacing the three ARNs with yours:
    ```json
    {
      "Version": "2012-10-17",
@@ -57,38 +87,30 @@ This user can run SQL on this one database and read this one password, nothing e
        {
          "Effect": "Allow",
          "Action": "secretsmanager:GetSecretValue",
-         "Resource": "YOUR_DB_SECRET_ARN"
+         "Resource": ["YOUR_APP_SECRET_ARN", "YOUR_DB_SECRET_ARN"]
        }
      ]
    }
    ```
-   Name the policy `sharps-leaderboard-db`.
-3. On the user's **Security credentials** tab, choose **Create access key → Application running outside AWS**. Copy the **access key ID** and the **secret access key**. The secret key is shown only once.
+   Name the policy `sharps-leaderboard-access`. The role can run SQL on this one database and read these two secrets, nothing else.
+4. Copy the role's **ARN** from the top of its page.
 
-### 4. Get the X and Anthropic keys
+### 6. Point GitHub at the role and turn on the site
 
-- **X:** sign in at developer.x.com, create a project and an app, and add credits. Copy the app's **Bearer Token**.
-- **Anthropic:** create an API key at console.anthropic.com. It's used to read picks out of post text and bet-slip images.
+1. In this repo, open **Settings → Secrets and variables → Actions**, switch to the **Variables** tab, and add two repository variables:
 
-### 5. Add the secrets to GitHub and turn on the site
-
-1. In this repo, open **Settings → Secrets and variables → Actions** and add these repository secrets:
-
-   | Secret | Value |
+   | Variable | Value |
    |---|---|
-   | `X_BEARER_TOKEN` | X bearer token |
-   | `ANTHROPIC_API_KEY` | Anthropic API key |
-   | `AWS_ACCESS_KEY_ID` | from step 3 |
-   | `AWS_SECRET_ACCESS_KEY` | from step 3 |
+   | `AWS_ROLE_ARN` | the role ARN from step 5 |
    | `AWS_REGION` | `us-east-1` |
-   | `DB_CLUSTER_ARN` | from step 1 |
-   | `DB_SECRET_ARN` | from step 2 |
 
-   Secrets stay hidden even though the repo is public. Never put keys in a file in the repo.
+   These aren't secret: a role ARN is useless outside this repo. If you added any repository *secrets* in an earlier version of these steps, delete them, because they're no longer used.
 2. Open **Settings → Pages**, set *Source* to **Deploy from a branch**, then choose **main** and **/docs**.
 3. On the **Actions** tab, open **Daily update** and click **Run workflow**. The first run creates the tables and adds the accounts from `accounts.txt`. After that it runs by itself every day at about 5 PM Eastern.
 
 The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
+
+**If the run fails at "Sign in to AWS",** check the two variables and the role's trust relationship from step 5. **If it fails reading the secret,** check the secret name is exactly `sharps-leaderboard/app` and that its ARN is in the role's policy.
 
 ## The database
 
@@ -197,7 +219,7 @@ Picks are also marked `manual` when the team can't be matched to a game, or when
 Rough monthly figures at one run a day for nine accounts:
 
 - **Aurora:** the database is awake about 10 minutes a day (the run plus 5 idle minutes before it pauses) at the smallest size, which comes to roughly $1 a month. Storage for this much data is pennies. When paused there's no compute charge. Leaving the query editor connected keeps it awake, so close it when you're done.
-- **Secrets Manager:** about $0.40 a month for the one secret.
+- **Secrets Manager:** about $0.40 a month per secret, so about $0.80 for the two. Reading them once a day is a fraction of a cent.
 - **X API:** about $0.005 per post fetched. Only posts since the last run come back, so the cost depends on how much these accounts post, not how often the tracker runs. At 5 to 15 posts per account per day, that's about $7 to $20 a month. The very first run is capped at 20 posts per account.
 - **Deleted-post checks:** one more X read per pick post, once. At 5 pick posts per account per day, that's roughly $7 a month for nine accounts. Set `CHECK_DELETIONS=false` to turn it off.
 - **Anthropic API:** posts that obviously aren't picks are skipped without an API call. Expect a few dollars a month at most.
@@ -210,9 +232,11 @@ To spend less, track fewer accounts.
 
 ```
 pip install -r requirements.txt
-cp .env.example .env          # then fill in the same values as the GitHub secrets
+cp .env.example .env
 python run.py all             # the full daily run
 ```
+
+To use the same keys as the daily job, sign in to AWS on your computer (`aws configure` or `aws sso login`) with an account allowed to read the `sharps-leaderboard/app` secret. Then set `APP_SECRET_ID` and `AWS_REGION` in `.env`. Anything you set directly in `.env` overrides the value in the secret, which is handy for trying a different key without touching the shared one.
 
 The local run uses the same Aurora database, so anything you do shows up in the next daily run. To work against a local Postgres instead, set `DATABASE_URL` in `.env` and `pip install "psycopg[binary]"`.
 
