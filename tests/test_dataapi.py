@@ -77,6 +77,17 @@ class DataAPITests(unittest.TestCase):
             make(Missing()).execute("SELECT 1")
         self.assertIn("Set DB_NAME", str(ctx.exception))
 
+    def test_wrong_password_hint(self):
+        class BadPassword(FakeClient):
+            def execute_statement(self, **req):
+                self.calls.append(req)
+                e = ResumingError("DatabaseErrorException")
+                e.args = ('ERROR: password authentication failed for user "postgres"; SQLState: 28P01',)
+                raise e
+        with self.assertRaises(DatabaseError) as ctx:
+            make(BadPassword()).execute("SELECT 1")
+        self.assertIn("doesn't match the database", str(ctx.exception))
+
     def test_real_errors_are_not_retried(self):
         c = FakeClient(fail_times=1, code="BadRequestException")
         with mock.patch("tracker.db.time.sleep"), self.assertRaises(DatabaseError):

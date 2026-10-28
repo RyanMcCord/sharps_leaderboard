@@ -101,6 +101,7 @@ The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
 - **A wrong ARN, region or access key.**
 - **A policy missing the right ARNs.** The AWS user's policy must list both your cluster ARN and your database secret ARN.
 - **`DB_NAME` not matching the database's name.**
+- **"password authentication failed".** The password in the `sharps-leaderboard/db` secret doesn't match the database's. Set the master password again on the cluster (**Modify**, **Self managed**, **Apply immediately**), then save the same password in the secret.
 
 X and Anthropic errors name the secret to check. The first run can take an extra 15–30 seconds while the database wakes up. That's normal.
 

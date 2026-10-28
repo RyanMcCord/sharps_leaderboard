@@ -99,6 +99,10 @@ class DataAPIDatabase:
         if not hint and "does not exist" in msg and "database" in msg:
             hint = (f"There's no database named '{self.base['database']}' in the cluster. Set DB_NAME to the "
                     "database's name (postgres if you skipped 'Initial database name' when creating it).")
+        if not hint and ("password authentication failed" in msg or "28P01" in msg):
+            hint = ("The username or password in the DB_SECRET_ARN secret doesn't match the database. Set the master "
+                    "password on the cluster (Modify > Self managed, Apply immediately) and save the same username "
+                    "and password in that secret.")
         if not hint and "resourceArn" in msg:
             hint = "DB_CLUSTER_ARN doesn't look right, or the cluster is in a different region from AWS_REGION."
         text = f"{code or 'Error'}: {msg[:400]}"
