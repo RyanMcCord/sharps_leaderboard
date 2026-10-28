@@ -16,8 +16,8 @@ You'll need about 30 minutes. Steps 1–4 happen in the AWS console and step 5 i
 
 In the AWS console, open **RDS → Databases → Create database**, then:
 
-1. **Creation method:** Standard create.
-2. **Engine:** Aurora (PostgreSQL Compatible). For **version**, pick the newest **16.x**. It needs to be 16.3 or later to pause at zero.
+1. **Creation method:** Standard create. Don't use *Easy create* or *express configuration*: express clusters have no password and don't work with the RDS Data API's password sign-in or the Query Editor.
+2. **Engine:** Aurora (PostgreSQL Compatible). Keep the default version. It needs to be 16.3 or later to pause at zero, and current defaults are.
 3. **Templates:** Dev/Test.
 4. **DB cluster identifier:** `sharps-leaderboard`.
 5. **Credentials:** keep the master username `postgres` and choose **Self managed**. Set a long random password and save it somewhere for step 2.
