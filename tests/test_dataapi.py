@@ -57,7 +57,7 @@ class DataAPITests(unittest.TestCase):
         self.assertEqual(len(c.calls), 2)
 
     def test_setup_errors_get_a_hint(self):
-        for code, words in [("HttpEndpointNotEnabledException", "enable the RDS Data API"),
+        for code, words in [("HttpEndpointNotEnabledException", "Actions > Enable RDS Data API"),
                             ("AccessDeniedException", "policy"),
                             ("DatabaseNotFoundException", "writer instance")]:
             c = FakeClient(fail_times=1, code=code)
