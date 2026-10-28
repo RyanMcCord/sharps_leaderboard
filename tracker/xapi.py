@@ -10,6 +10,9 @@ import requests
 from . import config, store
 
 API = "https://api.x.com/2"
+# Pages of up to 100 posts to fetch per account per run. Only matters if an account
+# posts more than 100 times between runs; anything older than that would be missed.
+MAX_PAGES = 5
 
 
 class XAPIError(RuntimeError):
@@ -18,7 +21,7 @@ class XAPIError(RuntimeError):
 
 def _get(path, params):
     if not config.X_BEARER_TOKEN:
-        raise XAPIError("X_BEARER_TOKEN is not set. Add it to your .env file.")
+        raise XAPIError("X_BEARER_TOKEN is not set. Add it as a GitHub repo secret (or to .env when running locally).")
     headers = {"Authorization": f"Bearer {config.X_BEARER_TOKEN}"}
     for attempt in range(3):
         r = requests.get(f"{API}{path}", headers=headers, params=params, timeout=30)
@@ -30,6 +33,8 @@ def _get(path, params):
             continue
         if r.status_code == 402:
             raise XAPIError("X API says payment is required - add credits in the developer console.")
+        if r.status_code == 401:
+            raise XAPIError("X API rejected the token (401). Check X_BEARER_TOKEN is the app's Bearer Token.")
         if not r.ok:
             raise XAPIError(f"{r.status_code} from X API: {r.text[:300]}")
         return r.json()
@@ -65,9 +70,15 @@ def fetch_new_posts(db):
         }
         if acct["last_seen_post_id"]:
             params["since_id"] = acct["last_seen_post_id"]
-        data = _get(f"/users/{acct['x_user_id']}/tweets", params)
-        media = {m["media_key"]: m for m in data.get("includes", {}).get("media", [])}
-        posts = data.get("data", [])
+        posts, media = [], {}
+        for page in range(MAX_PAGES if acct["last_seen_post_id"] else 1):
+            data = _get(f"/users/{acct['x_user_id']}/tweets", params)
+            posts += data.get("data", [])
+            media.update({m["media_key"]: m for m in data.get("includes", {}).get("media", [])})
+            token = data.get("meta", {}).get("next_token")
+            if not token:  # no more new posts since the last run
+                break
+            params["pagination_token"] = token
         for p in posts:
             urls = []
             for key in p.get("attachments", {}).get("media_keys", []):
@@ -78,8 +89,7 @@ def fetch_new_posts(db):
             text = (p.get("note_tweet") or {}).get("text") or p.get("text", "")
             store.insert_post(db, p["id"], acct["id"], p["created_at"], text, urls, p)
         if posts:
-            newest = data.get("meta", {}).get("newest_id") or max(posts, key=lambda p: int(p["id"]))["id"]
-            store.set_last_seen(db, acct["id"], newest)
+            store.set_last_seen(db, acct["id"], max(posts, key=lambda p: int(p["id"]))["id"])
         print(f"  @{acct['x_handle']}: {len(posts)} new posts")
         total += len(posts)
     return total

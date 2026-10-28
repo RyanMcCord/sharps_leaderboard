@@ -27,9 +27,9 @@ def add_account(db, handle):
 
 
 def set_active(db, handle, active):
-    rows = db.query("UPDATE accounts SET active = :a WHERE lower(x_handle) = lower(:h) RETURNING x_handle",
-                    {"a": active, "h": handle})
-    return bool(rows)
+    # Two statements, because the Data API only returns rows for SELECT (not UPDATE ... RETURNING)
+    db.execute("UPDATE accounts SET active = :a WHERE lower(x_handle) = lower(:h)", {"a": active, "h": handle})
+    return bool(db.query("SELECT 1 AS found FROM accounts WHERE lower(x_handle) = lower(:h)", {"h": handle}))
 
 
 def save_x_user(db, handle, x_user_id, followers):
@@ -143,7 +143,7 @@ def posts_to_check_for_deletion(db, settle_hours=12, limit=100):
         "WHERE po.deletion_checked_at IS NULL "
         "GROUP BY po.id "
         "HAVING bool_and(p.result <> 'pending') "
-        "AND max(p.graded_at) < now() - make_interval(hours => :h) "
+        "AND max(p.graded_at) < now() - make_interval(hours => CAST(:h AS int)) "
         "ORDER BY min(po.posted_at) LIMIT :n",
         {"h": settle_hours, "n": limit})
     return [r["id"] for r in rows]

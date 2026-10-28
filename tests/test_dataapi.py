@@ -50,6 +50,33 @@ class DataAPITests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 2)
         self.assertNotIn("formatRecordsAs", c.calls[0])
 
+    def test_unavailable_while_waking_is_retried(self):
+        c = FakeClient(fail_times=1, code="DatabaseUnavailableException")
+        with mock.patch("tracker.db.time.sleep"):
+            make(c).execute("SELECT 1")
+        self.assertEqual(len(c.calls), 2)
+
+    def test_setup_errors_get_a_hint(self):
+        for code, words in [("HttpEndpointNotEnabledException", "enable the RDS Data API"),
+                            ("AccessDeniedException", "policy"),
+                            ("DatabaseNotFoundException", "writer instance")]:
+            c = FakeClient(fail_times=1, code=code)
+            with mock.patch("tracker.db.time.sleep"), self.assertRaises(DatabaseError) as ctx:
+                make(c).execute("SELECT 1")
+            self.assertIn(words, str(ctx.exception))
+            self.assertEqual(len(c.calls), 1)  # not retried
+
+    def test_missing_database_hint(self):
+        class Missing(FakeClient):
+            def execute_statement(self, **req):
+                self.calls.append(req)
+                e = ResumingError("DatabaseErrorException")
+                e.args = ('ERROR: database "sharps" does not exist',)
+                raise e
+        with self.assertRaises(DatabaseError) as ctx:
+            make(Missing()).execute("SELECT 1")
+        self.assertIn("Set DB_NAME", str(ctx.exception))
+
     def test_real_errors_are_not_retried(self):
         c = FakeClient(fail_times=1, code="BadRequestException")
         with mock.patch("tracker.db.time.sleep"), self.assertRaises(DatabaseError):

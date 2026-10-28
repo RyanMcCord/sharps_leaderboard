@@ -10,7 +10,7 @@ The daily job runs on GitHub's servers, with its keys stored as GitHub secrets. 
 
 ## Setup
 
-You'll need about 30 minutes. Steps 1–4 happen in the AWS console and step 5 in GitHub. Pick one AWS region and use it throughout. The steps below assume **us-east-1 (N. Virginia)**.
+You'll need about 30 minutes. Steps 1–4 happen in the AWS console and step 5 in GitHub. Create everything in one AWS region. This project's database is in **us-east-2 (Ohio)**, so check the region selector in the top-right of the AWS console says Ohio before each step.
 
 ### 1. Create the database
 
@@ -25,10 +25,10 @@ In the AWS console, open **RDS → Databases → Create database**, then:
 7. **Instance configuration:** choose **Serverless v2**. Set the capacity range to **minimum 0 ACUs** and **maximum 1 ACU**, and set it to pause after **5 minutes** of inactivity.
 8. **Availability & durability:** Don't create an Aurora Replica.
 9. **Connectivity:** keep the default VPC and set **Public access** to **No**. Tick **Enable the RDS Data API**. The daily job reaches the database through this AWS service, so the database is never open to the internet.
-10. **Additional configuration:** set **Initial database name** to `sharps`.
+10. **Additional configuration:** set **Initial database name** to `sharps`. If you skip this, the database is called `postgres` instead. That's fine, just set the `DB_NAME` secret to `postgres` in step 5.
 11. Click **Create database**. It takes about 10 minutes.
 
-When it's ready, open the cluster (`sharps-leaderboard`, not the instance under it). On the **Configuration** tab, copy the **ARN**. This is your `DB_CLUSTER_ARN`.
+When it's ready, open the cluster (`sharps-leaderboard`, not the instance under it). On the **Configuration** tab, copy the **ARN**. This is your `DB_CLUSTER_ARN`. On the **Connectivity & security** tab, check the **RDS Data API** shows as enabled.
 
 ### 2. Store the database password in Secrets Manager
 
@@ -82,20 +82,27 @@ This access key doesn't expire. If you think it may have leaked, deactivate it o
    | `ANTHROPIC_API_KEY` | Anthropic API key |
    | `AWS_ACCESS_KEY_ID` | from step 4 |
    | `AWS_SECRET_ACCESS_KEY` | from step 4 |
-   | `AWS_REGION` | the region your database is in, e.g. `us-east-1` |
+   | `AWS_REGION` | the region your database is in: `us-east-2` |
    | `DB_CLUSTER_ARN` | from step 1 |
    | `DB_SECRET_ARN` | from step 2 |
-   | `DB_NAME` | only if your database isn't named `sharps`. If you skipped *Initial database name* in step 1, use `postgres` |
+   | `DB_NAME` | the database's name. `postgres` if you skipped *Initial database name* in step 1 (as this project did), otherwise `sharps`. If you leave this secret out, `sharps` is used |
 
    Secrets stay hidden even though the repo is public. Never put keys in a file in the repo. The database password itself is never in GitHub: the job uses `DB_SECRET_ARN` to have AWS look it up in Secrets Manager.
 2. Open **Settings → Pages**, set *Source* to **Deploy from a branch**, then choose **main** and **/docs**.
-3. On the **Actions** tab, open **Daily update** and click **Run workflow**. The first run creates the tables and adds the accounts from `accounts.txt`. After that it runs by itself every day at about 5 PM Eastern.
+3. On the **Actions** tab, open **Daily update** and click **Run workflow**. The first run creates the tables and adds the accounts from `accounts.txt`. After that it runs by itself every day at 21:07 UTC, which is 5:07 PM Eastern during daylight saving time and 4:07 PM otherwise.
 
 The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
 
 **Changing a key later:** update the matching repo secret. The next run uses it.
 
-**If the first run fails,** open the run on the Actions tab and expand **Run the tracker**. "Could not connect" or "AccessDenied" usually means a wrong ARN, region or access key, or a policy that doesn't list the right ARNs. "Database does not exist" means `DB_NAME` needs setting.
+**If the first run fails,** open the run on the Actions tab and expand **Run the tracker**. Database errors print a line starting with `->` that says what to check. The usual causes are:
+
+- **Data API turned off.** Turn it on under the cluster's **Modify** settings.
+- **A wrong ARN, region or access key.**
+- **A policy missing the right ARNs.** The AWS user's policy must list both your cluster ARN and your database secret ARN.
+- **`DB_NAME` not matching the database's name.**
+
+X and Anthropic errors name the secret to check. The first run can take an extra 15–30 seconds while the database wakes up. That's normal.
 
 ## The database
 
@@ -130,7 +137,7 @@ The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
 
 There's also a `posts` table, which keeps a copy of every post so a pick still counts if it's deleted later. Its `deleted_at` column records when the tracker noticed a post was gone. The `leaderboard` view has each active account's standings, leaving out late picks, plus counts of late and deleted picks.
 
-**Looking at the data by hand:** in the RDS console, open **Query editor**, choose the cluster, and pick **Connect with a Secrets Manager ARN** using your secret ARN and database `sharps`. Then run, for example:
+**Looking at the data by hand:** in the RDS console, open **Query editor**, choose the cluster, and pick **Connect with a Secrets Manager ARN**. Use your `DB_SECRET_ARN` and the same database name as `DB_NAME` (`postgres` here). Then run, for example:
 
 ```sql
 SELECT * FROM leaderboard;
@@ -159,10 +166,10 @@ You can also add accounts by adding handles to `accounts.txt` and committing. Th
 
 ## How the daily run works
 
-Each day at about 5 PM Eastern, the run:
+Each day at about 5 PM Eastern (4 PM outside daylight saving time), the run:
 
 1. Makes sure the tables exist and adds any new handles from `accounts.txt`.
-2. Fetches each active account's posts since the last run, which wakes the database (about 15–30 seconds).
+2. Fetches each active account's posts since the last run, up to 500 per account. Starting the run wakes the database, which takes about 15–30 seconds.
 3. Reads the picks out of new posts.
 4. Matches picks to their games, records whether each went out before the start, and grades the ones whose games have finished. Last night's games are final by then.
 5. Checks each graded pick post once, at least 12 hours after grading, to see whether the tipster deleted it.

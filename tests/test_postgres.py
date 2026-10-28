@@ -22,7 +22,12 @@ URL = os.getenv("PG_TEST_URL")
 
 
 class PsqlDatabase:
-    """Same interface as tracker.db's classes, through the psql command line."""
+    """Same interface as tracker.db's classes, through the psql command line.
+
+    It mimics the RDS Data API on purpose, so these tests catch what would break on Aurora:
+    - parameters arrive typed: ints as bigint, floats as double, strings as text
+    - only SELECT statements return rows (the Data API ignores formatRecordsAs otherwise)
+    """
     PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
     def __init__(self, args):
@@ -34,11 +39,13 @@ class PsqlDatabase:
             return "NULL"
         if isinstance(v, bool):
             return "true" if v else "false"
-        if isinstance(v, (int, float)):
-            return repr(v)
+        if isinstance(v, int):
+            return f"CAST({v} AS bigint)"
+        if isinstance(v, float):
+            return f"CAST({v!r} AS float8)"
         if isinstance(v, (dict, list)):
             v = json.dumps(v)
-        return "'" + str(v).replace("'", "''") + "'"
+        return "CAST('" + str(v).replace("'", "''") + "' AS text)"
 
     def _sql(self, sql, params):
         params = params or {}
@@ -52,6 +59,9 @@ class PsqlDatabase:
         return r.stdout
 
     def query(self, sql, params=None):
+        if not sql.lstrip().upper().startswith(("SELECT", "WITH")):
+            self._run(self._sql(sql, params))
+            return []  # like the Data API: no rows back from INSERT/UPDATE ... RETURNING
         out = self._run(f"WITH t AS ({self._sql(sql, params)}) SELECT coalesce(json_agg(t), '[]') FROM t")
         return json.loads(out)
 
@@ -151,6 +161,30 @@ class PostgresTests(unittest.TestCase):
         second_call = [p for path, p in calls if path == "/users/111/tweets"][-1]
         self.assertEqual(second_call["since_id"], "1850000000000000003")
         self.assertEqual(second_call["max_results"], 100)
+
+        # more than 100 new posts since the last run: follow next_token until it runs out
+        pages = [
+            {"data": [{"id": "1850000000000000006", "created_at": "2026-10-25T18:00:00.000Z", "text": "a"}],
+             "meta": {"next_token": "page2"}},
+            {"data": [{"id": "1850000000000000005", "created_at": "2026-10-25T17:30:00.000Z", "text": "b"},
+                      {"id": "1850000000000000004", "created_at": "2026-10-25T17:00:00.000Z", "text": "c"}],
+             "meta": {}},
+        ]
+        paged = []
+
+        def paged_get(path, params):
+            if path != "/users/111/tweets":
+                return {"meta": {}}
+            paged.append(dict(params))
+            return pages[len(paged) - 1]
+
+        with mock.patch.object(xapi, "_get", paged_get):
+            self.assertEqual(xapi.fetch_new_posts(self.db), 3)
+        self.assertEqual(paged[1]["pagination_token"], "page2")
+        self.assertEqual(paged[1]["since_id"], "1850000000000000003")
+        acct = {a["x_handle"]: a for a in store.list_accounts(self.db)}["SharpPickss"]
+        self.assertEqual(acct["last_seen_post_id"], "1850000000000000006")
+        self.db.execute("DELETE FROM posts WHERE id IN ('1850000000000000004', '1850000000000000005', '1850000000000000006')")
         self.assertEqual(len(store.unparsed_posts(self.db)), 3)
 
         # --- parse: fake Claude ---

@@ -101,7 +101,7 @@ def clean_pick(p):
 def _client():
     import anthropic
     if not config.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
+        raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it as a GitHub repo secret (or to .env when running locally).")
     return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
 
