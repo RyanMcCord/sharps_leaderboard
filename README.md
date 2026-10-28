@@ -28,7 +28,7 @@ In the AWS console, open **RDS → Databases → Create database**, then:
 10. **Additional configuration:** set **Initial database name** to `sharps`. If you skip this, the database is called `postgres` instead. That's fine, just set the `DB_NAME` secret to `postgres` in step 5.
 11. Click **Create database**. It takes about 10 minutes.
 
-When it's ready, open the cluster (`sharps-leaderboard`, not the instance under it). On the **Configuration** tab, copy the **ARN**. This is your `DB_CLUSTER_ARN`. On the **Connectivity & security** tab, check the **RDS Data API** shows as enabled.
+When it's ready, open the cluster (`sharps-leaderboard`, not the instance under it). On the **Configuration** tab, copy the **ARN**. This is your `DB_CLUSTER_ARN`. On the **Connectivity & security** tab, check the **RDS Data API** shows as enabled. If it doesn't, choose **Actions → Enable RDS Data API**.
 
 ### 2. Store the database password in Secrets Manager
 
@@ -97,7 +97,7 @@ The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
 
 **If the first run fails,** open the run on the Actions tab and expand **Run the tracker**. Database errors print a line starting with `->` that says what to check. The usual causes are:
 
-- **Data API turned off.** Turn it on under the cluster's **Modify** settings.
+- **Data API turned off.** Open the cluster in the RDS console and choose **Actions → Enable RDS Data API**.
 - **A wrong ARN, region or access key.**
 - **A policy missing the right ARNs.** The AWS user's policy must list both your cluster ARN and your database secret ARN.
 - **`DB_NAME` not matching the database's name.**

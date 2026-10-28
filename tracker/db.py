@@ -35,7 +35,7 @@ class DataAPIDatabase:
     # Plain-language hints for the setup mistakes these errors usually mean
     HINTS = {
         "HttpEndpointNotEnabledException": "The RDS Data API is turned off for this cluster. In the RDS console, "
-                                           "choose the cluster, then Modify, and enable the RDS Data API.",
+                                           "open the cluster, then choose Actions > Enable RDS Data API.",
         "AccessDeniedException": "The AWS user isn't allowed to do this. Check its policy lists the right cluster "
                                  "and secret ARNs, and that AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are right.",
         "SecretsErrorException": "The Data API couldn't read the database password. Check DB_SECRET_ARN, and that "
