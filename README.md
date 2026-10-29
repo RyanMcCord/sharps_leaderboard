@@ -6,73 +6,51 @@ Tracks the free picks that sports-betting accounts post on X and grades them aga
 X API (posts + bet-slip images) → Claude (read picks) → Aurora Postgres (store) → ESPN scores (grade) → leaderboard site
 ```
 
-The daily job runs on GitHub's servers, with its keys stored as GitHub secrets. The data lives in an Aurora Serverless Postgres database in your AWS account, which pauses itself when idle, so you only pay for the few minutes a day it's awake. Visitors to the site never touch the database: the daily job queries it once and bakes the results into the page.
+The daily job runs on GitHub's servers, with its keys stored as GitHub secrets. The data lives in an Aurora Serverless Postgres database in your AWS account, which pauses itself when idle. The database has no password: on each run, the job's AWS access key signs a sign-in token that's good for 15 minutes. Visitors to the site never touch the database: the daily job queries it once and bakes the results into the page.
 
 ## Setup
 
-You'll need about 30 minutes. Steps 1–4 happen in the AWS console and step 5 in GitHub. Create everything in one AWS region. This project's database is in **us-east-2 (Ohio)**, so check the region selector in the top-right of the AWS console says Ohio before each step.
+You'll need about 20 minutes. Steps 1–3 happen in the AWS console and step 4 in GitHub. Create everything in one AWS region. This project's database is in **us-east-2 (Ohio)**, so check the region selector in the top-right of the AWS console says Ohio before each step.
 
 ### 1. Create the database
 
-In the AWS console, open **RDS → Databases → Create database**, then:
+1. In the AWS console, open **RDS → Create database** and choose **Aurora (PostgreSQL Compatible)**.
+2. Choose **Express configuration**. On the AWS Free plan it's the only option. Full configuration is greyed out until you upgrade.
+3. Name it `sharps-leaderboard`. If the page offers capacity settings, set the **minimum to 0 ACUs** and **pause after 5 minutes**, so it sleeps between runs. Leave everything else as it is.
+4. Create it and wait until its status says **Available**.
+5. Open the cluster and go to the **Connectivity & security** tab. Under **Endpoints**, copy the endpoint whose type is **Writer**. It looks like `sharps-leaderboard.cluster-xxxxxxxx.us-east-2.rds.amazonaws.com`. This is your `DB_HOST`.
 
-1. **Creation method:** Standard create. Don't use *Easy create* or *express configuration*: express clusters have no password and don't work with the RDS Data API's password sign-in or the Query Editor.
-2. **Engine:** Aurora (PostgreSQL Compatible). Keep the default version. It needs to be 16.3 or later to pause at zero, and current defaults are.
-3. **Templates:** Dev/Test.
-4. **DB cluster identifier:** `sharps-leaderboard`.
-5. **Credentials:** keep the master username `postgres` and choose **Self managed**. Set a long random password and save it somewhere for step 2.
-6. **Cluster storage configuration:** Aurora Standard.
-7. **Instance configuration:** choose **Serverless v2**. Set the capacity range to **minimum 0 ACUs** and **maximum 1 ACU**, and set it to pause after **5 minutes** of inactivity.
-8. **Availability & durability:** Don't create an Aurora Replica.
-9. **Connectivity:** keep the default VPC and set **Public access** to **No**. Tick **Enable the RDS Data API**. The daily job reaches the database through this AWS service, so the database is never open to the internet.
-10. **Additional configuration:** set **Initial database name** to `sharps`. If you skip this, the database is called `postgres` instead. That's fine, just set the `DB_NAME` secret to `postgres` in step 5.
-11. Click **Create database**. It takes about 10 minutes.
+Express clusters have no password and can't be given one. Sign-in is by IAM token only. They also have no initial database, so the tracker uses the built-in `postgres` database. You don't need to enable the RDS Data API, and you don't need a Secrets Manager secret.
 
-When it's ready, open the cluster (`sharps-leaderboard`, not the instance under it). On the **Configuration** tab, copy the **ARN**. This is your `DB_CLUSTER_ARN`. On the **Connectivity & security** tab, check the **RDS Data API** shows as enabled. If it doesn't, choose **Actions → Enable RDS Data API**.
-
-### 2. Store the database password in Secrets Manager
-
-The Data API reads the database password from Secrets Manager.
-
-1. Open **Secrets Manager → Store a new secret**.
-2. Choose **Credentials for Amazon RDS database**. Enter `postgres` and the password from step 1, then select the `sharps-leaderboard` database.
-3. Name it `sharps-leaderboard/db` and store it.
-4. Open the secret and copy its **Secret ARN**. This is your `DB_SECRET_ARN`.
-
-### 3. Get the X and Anthropic keys
+### 2. Get the X and Anthropic keys
 
 - **X:** sign in at developer.x.com, create a project and an app, and add credits. Copy the app's **Bearer Token**.
 - **Anthropic:** sign in at platform.claude.com, add credits under **Billing**, then create a key under **API Keys**. It's used to read picks out of post text and bet-slip images.
 
-### 4. Create a limited AWS user for the daily job
+### 3. Create a limited AWS user for the daily job
 
-This user can run SQL on this one database and read the database password, nothing else.
+This user can sign in to the database as `postgres`, and do nothing else in your AWS account.
 
 1. Open **IAM → Users → Create user** and name it `sharps-leaderboard-bot`. Don't give it console access, and skip permissions for now.
-2. Open the new user, then choose **Add permissions → Create inline policy**. Switch to **JSON** and paste this, replacing the two ARNs with yours:
+2. Open the new user, then choose **Add permissions → Create inline policy**. Switch to **JSON** and paste this, replacing `REGION` and `ACCOUNT_ID` with yours. For this project that's `us-east-2` and `331384580180`, and your account ID is also shown in the top-right menu of the console.
    ```json
    {
      "Version": "2012-10-17",
      "Statement": [
        {
          "Effect": "Allow",
-         "Action": ["rds-data:ExecuteStatement", "rds-data:BatchExecuteStatement"],
-         "Resource": "YOUR_DB_CLUSTER_ARN"
-       },
-       {
-         "Effect": "Allow",
-         "Action": "secretsmanager:GetSecretValue",
-         "Resource": "YOUR_DB_SECRET_ARN"
+         "Action": "rds-db:connect",
+         "Resource": "arn:aws:rds-db:REGION:ACCOUNT_ID:dbuser:*/postgres"
        }
      ]
    }
    ```
-   Name the policy `sharps-leaderboard-db`.
+   Name the policy `sharps-leaderboard-db`. The `*` stands for the cluster's resource ID. It changes if you ever recreate the cluster, so the wildcard means the policy keeps working.
 3. On the user's **Security credentials** tab, choose **Create access key → Application running outside AWS**. Copy the **access key ID** and the **secret access key**. The secret key is shown only once.
 
 This access key doesn't expire. If you think it may have leaked, deactivate it on the same tab, create a new one, and update the two GitHub secrets. Rotating it every few months is good practice either way.
 
-### 5. Add the secrets to GitHub and turn on the site
+### 4. Add the secrets to GitHub and turn on the site
 
 1. In this repo, open **Settings → Secrets and variables → Actions** and add these repository secrets:
 
@@ -80,14 +58,13 @@ This access key doesn't expire. If you think it may have leaked, deactivate it o
    |---|---|
    | `X_BEARER_TOKEN` | X bearer token |
    | `ANTHROPIC_API_KEY` | Anthropic API key |
-   | `AWS_ACCESS_KEY_ID` | from step 4 |
-   | `AWS_SECRET_ACCESS_KEY` | from step 4 |
+   | `AWS_ACCESS_KEY_ID` | from step 3 |
+   | `AWS_SECRET_ACCESS_KEY` | from step 3 |
    | `AWS_REGION` | the region your database is in: `us-east-2` |
-   | `DB_CLUSTER_ARN` | from step 1 |
-   | `DB_SECRET_ARN` | from step 2 |
-   | `DB_NAME` | the database's name. `postgres` if you skipped *Initial database name* in step 1 (as this project did), otherwise `sharps`. If you leave this secret out, `sharps` is used |
+   | `DB_HOST` | the writer endpoint from step 1 |
+   | `DB_NAME` | optional. Leave it out, or set it to `postgres` |
 
-   Secrets stay hidden even though the repo is public. Never put keys in a file in the repo. The database password itself is never in GitHub: the job uses `DB_SECRET_ARN` to have AWS look it up in Secrets Manager.
+   Secrets stay hidden even though the repo is public. Never put keys in a file in the repo. If you added `DB_CLUSTER_ARN` or `DB_SECRET_ARN` under an earlier version of these steps, delete them. They're only for the full-configuration setup described at the end of this section.
 2. Open **Settings → Pages**, set *Source* to **Deploy from a branch**, then choose **main** and **/docs**.
 3. On the **Actions** tab, open **Daily update** and click **Run workflow**. The first run creates the tables and adds the accounts from `accounts.txt`. After that it runs by itself every day at 21:07 UTC, which is 5:07 PM Eastern during daylight saving time and 4:07 PM otherwise.
 
@@ -97,13 +74,22 @@ The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
 
 **If the first run fails,** open the run on the Actions tab and expand **Run the tracker**. Database errors print a line starting with `->` that says what to check. The usual causes are:
 
-- **Data API turned off.** Open the cluster in the RDS console and choose **Actions → Enable RDS Data API**.
-- **A wrong ARN, region or access key.**
-- **A policy missing the right ARNs.** The AWS user's policy must list both your cluster ARN and your database secret ARN.
-- **`DB_NAME` not matching the database's name.**
-- **"password authentication failed".** The password in the `sharps-leaderboard/db` secret doesn't match the database's. Set the master password again on the cluster (**Modify**, **Self managed**, **Apply immediately**), then save the same password in the secret.
+- **"PAM authentication failed".** AWS didn't accept the sign-in token. Check the user's policy from step 3, the access key secrets, and that `AWS_REGION` matches the cluster.
+- **"could not translate host name".** `DB_HOST` isn't the writer endpoint.
+- **"database ... does not exist".** `DB_NAME` should be `postgres`, or left out.
 
-X and Anthropic errors name the secret to check. The first run can take an extra 15–30 seconds while the database wakes up. That's normal.
+X and Anthropic errors name the secret to check. The first database step can take an extra 15–30 seconds while the database wakes up. That's normal.
+
+### Using a full-configuration cluster instead
+
+On a paid AWS plan you can create a regular (full-configuration) cluster with a password instead. In that case:
+
+- Enable the RDS Data API on the cluster.
+- Store the password in a Secrets Manager secret of type *Credentials for Amazon RDS database*.
+- Set `DB_CLUSTER_ARN` and `DB_SECRET_ARN` as GitHub secrets instead of `DB_HOST`.
+- Give the AWS user `rds-data:ExecuteStatement` on the cluster and `secretsmanager:GetSecretValue` on the secret.
+
+The tracker picks whichever setup the secrets point to.
 
 ## The database
 
@@ -138,14 +124,7 @@ X and Anthropic errors name the secret to check. The first run can take an extra
 
 There's also a `posts` table, which keeps a copy of every post so a pick still counts if it's deleted later. Its `deleted_at` column records when the tracker noticed a post was gone. The `leaderboard` view has each active account's standings, leaving out late picks, plus counts of late and deleted picks.
 
-**Looking at the data by hand:** in the RDS console, open **Query editor**, choose the cluster, and pick **Connect with a Secrets Manager ARN**. Use your `DB_SECRET_ARN` and the same database name as `DB_NAME` (`postgres` here). Then run, for example:
-
-```sql
-SELECT * FROM leaderboard;
-SELECT * FROM picks ORDER BY created_at DESC LIMIT 50;
-```
-
-The editor wakes the database. It pauses again 5 minutes after you stop querying.
+**Looking at the data by hand:** the RDS console's Query editor doesn't work with express clusters. Use the commands below instead. `python run.py standings` prints the leaderboard view and `python run.py export picks.csv` saves every pick to a spreadsheet. A desktop SQL tool also works: connect to `DB_HOST` as `postgres` over SSL, with a token from `aws rds generate-db-auth-token` as the password.
 
 ## Day to day
 
@@ -211,8 +190,8 @@ Picks are also marked `manual` when the team can't be matched to a game, or when
 
 Rough monthly figures at one run a day for nine accounts:
 
-- **Aurora:** the database is awake about 10 minutes a day (the run plus 5 idle minutes before it pauses) at the smallest size, which comes to roughly $1 a month. Storage for this much data is pennies. When paused there's no compute charge. Leaving the query editor connected keeps it awake, so close it when you're done.
-- **Secrets Manager:** about $0.40 a month for the database password secret.
+- **Aurora:** on the AWS Free plan, an express cluster within the free limits (up to 4 ACUs, 1 GB of storage) costs nothing. This project stores well under 1 GB a year. The Free plan ends after 6 months or when its credits run out. After that, a cluster that's awake about 10 minutes a day (the run plus 5 idle minutes before it pauses) comes to roughly $1 a month.
+- **Secrets Manager:** not used, so no cost.
 - **X API:** about $0.005 per post fetched. Only posts since the last run come back, so the cost depends on how much these accounts post, not how often the tracker runs. At 5 to 15 posts per account per day, that's about $7 to $20 a month. The very first run is capped at 20 posts per account.
 - **Deleted-post checks:** one more X read per pick post, once. At 5 pick posts per account per day, that's roughly $7 a month for nine accounts. Set `CHECK_DELETIONS=false` to turn it off.
 - **Anthropic API:** posts that obviously aren't picks are skipped without an API call. Expect a few dollars a month at most.
@@ -229,7 +208,7 @@ cp .env.example .env          # then fill in the same values as the GitHub secre
 python run.py all             # the full daily run
 ```
 
-The local run uses the same Aurora database, so anything you do shows up in the next daily run. To work against a local Postgres instead, set `DATABASE_URL` in `.env` and `pip install "psycopg[binary]"`.
+The local run uses the same Aurora database, so anything you do shows up in the next daily run. To work against a local Postgres instead, set `DATABASE_URL` in `.env` and leave `DB_HOST` blank.
 
 The code can also read the keys from a Secrets Manager secret if you set `APP_SECRET_ID`, but the daily run doesn't use that.
 
@@ -239,7 +218,7 @@ The code can also read the keys from a Secrets Manager secret if you set `APP_SE
 run.py                               command line
 accounts.txt                         starter list of handles
 tracker/schema.py                    tables, enums and the leaderboard view
-tracker/db.py                        database connection (RDS Data API, or direct Postgres)
+tracker/db.py                        database connection (IAM token, RDS Data API, or plain Postgres)
 tracker/store.py                     all the SQL
 tracker/xapi.py                      X API fetching
 tracker/parser.py                    reading picks (Claude, with images)

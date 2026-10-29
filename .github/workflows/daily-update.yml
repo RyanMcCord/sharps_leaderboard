@@ -34,17 +34,19 @@ jobs:
       - name: Run the tracker
         id: run
         continue-on-error: true   # still save whatever finished, then fail the job below
-        # Keys come from the repo's GitHub secrets. The database password itself stays in
-        # AWS Secrets Manager: DB_SECRET_ARN points the database connection at it.
+        # Keys come from the repo's GitHub secrets. The database has no password: the AWS
+        # access key signs a short-lived sign-in token for it on each run (DB_HOST).
         env:
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          # Only used for a full-configuration cluster reached through the RDS Data API
           DB_CLUSTER_ARN: ${{ secrets.DB_CLUSTER_ARN }}
           DB_SECRET_ARN: ${{ secrets.DB_SECRET_ARN }}
-          DB_NAME: ${{ secrets.DB_NAME || 'sharps' }}
         run: python run.py all
 
       - name: Save results

@@ -12,10 +12,14 @@ ROOT = Path(__file__).resolve().parent.parent
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 PARSER_MODEL = os.getenv("PARSER_MODEL", "claude-sonnet-5-5")
-# Aurora Serverless (through the RDS Data API)
+# Aurora signed in with IAM tokens (express clusters): the cluster's writer endpoint
+DB_HOST = os.getenv("DB_HOST", "").strip()
+DB_PORT = int(os.getenv("DB_PORT", "") or 5432)
+DB_USER = os.getenv("DB_USER", "") or "postgres"
+# Aurora through the RDS Data API (full-configuration clusters)
 DB_CLUSTER_ARN = os.getenv("DB_CLUSTER_ARN", "")
 DB_SECRET_ARN = os.getenv("DB_SECRET_ARN", "")
-DB_NAME = os.getenv("DB_NAME", "sharps")
+DB_NAME = os.getenv("DB_NAME", "") or "postgres"
 AWS_REGION = os.getenv("AWS_REGION", "") or os.getenv("AWS_DEFAULT_REGION", "")
 # Or any Postgres directly, e.g. for local development: postgresql://user:pass@localhost/sharps
 DATABASE_URL = os.getenv("DATABASE_URL", "")
