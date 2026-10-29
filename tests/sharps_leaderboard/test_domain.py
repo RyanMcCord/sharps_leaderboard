@@ -1,59 +1,11 @@
-"""Offline tests for grading and the leaderboard: python -m unittest discover tests"""
-import os
-import tempfile
+"""Domain tests: grading and pick rules, with no database, network or files."""
 import unittest
 from datetime import datetime, timezone
 
-from unittest import mock
-from tracker.grader import grade_pick, units_net
-from tracker.parser import might_be_pick
-from tracker.report import write_site
-from tracker.results import parse_scoreboard
+from bots.sharps_leaderboard.domain.grading import grade_pick, to_grader, units_net
+from bots.sharps_leaderboard.domain.picks import clean_pick, might_be_pick
 
-
-def team(display, short, abbr, location):
-    return {"displayName": display, "shortDisplayName": short, "name": short, "abbreviation": abbr, "location": location}
-
-
-def event(eid, start, home, hs, away, as_, state="STATUS_FINAL"):
-    return {
-        "id": eid, "date": start,
-        "competitions": [{
-            "status": {"type": {"completed": state == "STATUS_FINAL", "name": state}},
-            "competitors": [
-                {"homeAway": "home", "team": home, "score": str(hs)},
-                {"homeAway": "away", "team": away, "score": str(as_)},
-            ],
-        }],
-    }
-
-
-LAKERS = team("Los Angeles Lakers", "Lakers", "LAL", "Los Angeles")
-CLIPPERS = team("LA Clippers", "Clippers", "LAC", "LA")
-SUNS = team("Phoenix Suns", "Suns", "PHX", "Phoenix")
-CELTICS = team("Boston Celtics", "Celtics", "BOS", "Boston")
-KNICKS = team("New York Knicks", "Knicks", "NY", "New York")
-CHIEFS = team("Kansas City Chiefs", "Chiefs", "KC", "Kansas City")
-RAIDERS = team("Las Vegas Raiders", "Raiders", "LV", "Las Vegas")
-
-NBA_DAY = parse_scoreboard({"events": [
-    event("1", "2026-10-25T23:30Z", LAKERS, 112, SUNS, 105),       # Lakers win by 7, total 217
-    event("2", "2026-10-26T00:00Z", CELTICS, 100, KNICKS, 100 - 3), # Celtics win by 3, total 197
-    event("3", "2026-10-26T02:00Z", CLIPPERS, 99, team("Utah Jazz", "Jazz", "UTAH", "Utah"), 101, "STATUS_POSTPONED"),
-]})
-NFL_SUNDAY = parse_scoreboard({"events": [event("9", "2026-11-01T17:00Z", CHIEFS, 27, RAIDERS, 20)]})
-
-
-def games_for(league, day):
-    if league == "NBA" and day == "20261025":
-        return NBA_DAY
-    if league == "NFL" and day == "20261101":
-        return NFL_SUNDAY
-    return []
-
-
-NOW = datetime(2026, 11, 10, tzinfo=timezone.utc)
-POSTED = "2026-10-25T16:00:00Z"  # noon ET on game day
+from .fixtures import NOW, POSTED, games_for
 
 
 def pick(**kw):
@@ -137,7 +89,6 @@ class GradeTests(unittest.TestCase):
         self.assertEqual(self.g(bet_type="parlay", legs=legs)[0], "manual")
 
     def test_db_pick_conversion(self):
-        from tracker.grader import to_grader
         g = to_grader({"sport": "NBA", "type": "over_under", "line": -115, "point": 215.5, "side": "over", "team": "Lakers",
                        "period": "full_game", "created_at": POSTED,
                        "legs": [{"sport": "OTHER", "type": "moneyline", "team": "Suns"}]})
@@ -151,53 +102,23 @@ class GradeTests(unittest.TestCase):
         self.assertEqual(units_net("push", -110, 1), 0)
 
 
-class ReportTests(unittest.TestCase):
-    def test_site_embeds_picks_safely(self):
-        data = {"generated": "2026-10-26T21:00:00+00:00", "defaultOdds": -110, "minSample": 30,
-                "accounts": [{"h": "SharpPickss", "f": 1}],
-                "picks": [{"h": "SharpPickss", "t": POSTED, "lg": "NBA", "d": "Tricky </script><b>x</b>",
-                           "o": None, "u": 1, "r": "win", "n": 0.909, "id": "1"}]}
-        tmp = tempfile.mkdtemp()
-        with mock.patch("tracker.report.site_data", lambda db: data):
-            page = open(write_site(None, os.path.join(tmp, "docs", "index.html")), encoding="utf-8").read()
-        self.assertNotIn("__DATA__", page)
-        self.assertIn("SharpPickss", page)
-        self.assertEqual(page.count("</script>"), 2)  # post text can't close the data block early
+class PickRuleTests(unittest.TestCase):
+    def test_clean_pick_keeps_values_valid(self):
+        p = clean_pick({"sport": "nba", "type": "Spread", "line": "-115", "point": -4.5, "side": "sideways",
+                        "period": "1H??", "bet_description": "  Lakers -4.5  "})
+        self.assertEqual((p["sport"], p["type"], p["line"], p["side"], p["period"], p["bet_description"]),
+                         ("NBA", "spread", -115, None, "other", "Lakers -4.5"))
+        self.assertEqual(clean_pick({"sport": "cricket", "type": "weird", "line": "even"})["sport"], "OTHER")
+        self.assertIsNone(clean_pick({"line": "even"})["line"])
 
+    def test_parlay_legs_are_cleaned(self):
+        p = clean_pick({"sport": "NBA", "type": "parlay", "legs": [{"type": "moneyline", "team": "Suns"}]})
+        self.assertEqual(p["legs"][0]["type"], "moneyline")
+        self.assertEqual(p["legs"][0]["sport"], "OTHER")  # grading falls back to the parlay's league
 
-class FakeBlock:
-    def __init__(self, type, name=None, input=None, text=None):
-        self.type, self.name, self.input, self.text = type, name, input, text
-
-
-class FakeMessages:
-    def __init__(self, blocks):
-        self.blocks, self.calls = blocks, []
-
-    def create(self, **kw):
-        self.calls.append(kw)
-        return type("Msg", (), {"content": self.blocks})()
-
-
-class ParserCallTests(unittest.TestCase):
-    POST = {"x_handle": "SharpPickss", "posted_at": POSTED, "text": "Lakers -4.5 (2u)", "media_urls": []}
-
-    def call(self, blocks):
-        from tracker.parser import extract_picks
-        msgs = FakeMessages(blocks)
-        client = type("Client", (), {"messages": msgs})()
-        return extract_picks(client, self.POST), msgs.calls[0]
-
-    def test_asks_for_the_tool_without_forcing_it(self):
-        picks, req = self.call([FakeBlock("text", text="Here you go."), FakeBlock(
-            "tool_use", "record_picks", {"picks": [{"sport": "NBA", "type": "spread", "team": "Lakers", "point": -4.5,
-                                                    "units": 2, "bet_description": "Lakers -4.5"}]})])
-        self.assertEqual(req["tool_choice"], {"type": "auto"})  # forced tool choice is rejected by newer models
-        self.assertEqual([(p["team"], p["point"], p["units"]) for p in picks], [("Lakers", -4.5, 2)])
-
-    def test_plain_text_answer_means_no_picks(self):
-        picks, _ = self.call([FakeBlock("text", text="No picks in this post.")])
-        self.assertEqual(picks, [])
+    def test_default_odds_can_be_changed(self):
+        r, net, _, _ = grade_pick(pick(bet_type="moneyline", team="Lakers"), games_for, NOW, default_odds=-120)
+        self.assertAlmostEqual(net, 100 / 120, places=3)
 
 
 class PrefilterTests(unittest.TestCase):

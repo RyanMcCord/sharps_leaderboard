@@ -1,3 +1,7 @@
+"""Settings shared by every bot, read from the environment (GitHub secrets, or .env locally).
+
+Settings that only matter to one bot live in that bot's own settings module.
+"""
 import os
 from pathlib import Path
 
@@ -9,9 +13,11 @@ except ImportError:  # dotenv is optional
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# X API (read access)
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
+# Claude
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-PARSER_MODEL = os.getenv("PARSER_MODEL", "claude-sonnet-5-5")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "") or os.getenv("PARSER_MODEL", "") or "claude-sonnet-5-5"
 # Aurora signed in with IAM tokens (express clusters): the cluster's writer endpoint
 DB_HOST = os.getenv("DB_HOST", "").strip()
 DB_PORT = int(os.getenv("DB_PORT", "") or 5432)
@@ -23,16 +29,10 @@ DB_NAME = os.getenv("DB_NAME", "") or "postgres"
 AWS_REGION = os.getenv("AWS_REGION", "") or os.getenv("AWS_DEFAULT_REGION", "")
 # Or any Postgres directly, e.g. for local development: postgresql://user:pass@localhost/sharps
 DATABASE_URL = os.getenv("DATABASE_URL", "")
-MAX_POSTS_PER_ACCOUNT = max(5, min(100, int(os.getenv("MAX_POSTS_PER_ACCOUNT", "100"))))
-FIRST_RUN_POSTS = max(5, min(100, int(os.getenv("FIRST_RUN_POSTS", "20"))))
-DEFAULT_ODDS = int(os.getenv("DEFAULT_ODDS", "-110"))
-# Re-read each pick post once after grading to catch deleted picks (one paid read per post)
-CHECK_DELETIONS = os.getenv("CHECK_DELETIONS", "true").lower() not in ("0", "false", "no", "off")
-ACCOUNTS_FILE = ROOT / "accounts.txt"
 
 # Name or ARN of the AWS Secrets Manager secret holding the app's keys (see load_secrets)
 APP_SECRET_ID = os.getenv("APP_SECRET_ID", "")
-SECRET_KEYS = ("X_BEARER_TOKEN", "ANTHROPIC_API_KEY", "DB_CLUSTER_ARN", "DB_SECRET_ARN", "DB_NAME")
+SECRET_KEYS = ("X_BEARER_TOKEN", "ANTHROPIC_API_KEY", "DB_HOST", "DB_CLUSTER_ARN", "DB_SECRET_ARN", "DB_NAME")
 
 
 def load_secrets(client=None):
@@ -65,23 +65,3 @@ def load_secrets(client=None):
             globals()[key] = str(values[key]).strip()
             loaded.append(key)
     return loaded
-
-# League code -> ESPN scoreboard path
-LEAGUES = {
-    "NFL": "football/nfl",
-    "NCAAF": "football/college-football",
-    "NBA": "basketball/nba",
-    "WNBA": "basketball/wnba",
-    "NCAAB": "basketball/mens-college-basketball",
-    "MLB": "baseball/mlb",
-    "NHL": "hockey/nhl",
-}
-
-
-def load_handles():
-    handles = []
-    for line in ACCOUNTS_FILE.read_text().splitlines():
-        line = line.strip().lstrip("@")
-        if line and not line.startswith("#"):
-            handles.append(line)
-    return handles

@@ -1,4 +1,7 @@
-"""Grade picks against final scores.
+"""Grading picks against final scores. Pure domain logic: no I/O.
+
+Games come from a games_for(league, "YYYYMMDD") function the caller supplies
+(in production, the ScoresProvider port).
 
 Results:
   win / loss / push   graded automatically
@@ -11,8 +14,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import config
-from .results import get_games
+from .picks import AUTO_GRADED_LEAGUES, DEFAULT_ODDS
 
 ET = ZoneInfo("America/New_York")
 # How many days after the post to look for the game (football picks often go out days early).
@@ -149,7 +151,7 @@ def game_info(game, posted_at):
     }
 
 
-def grade_pick(pick, games_for, now=None):
+def grade_pick(pick, games_for, now=None, default_odds=DEFAULT_ODDS):
     """Return (result, units_net, note, game).
 
     result None means still pending. game is the matched game's details (or None),
@@ -157,7 +159,7 @@ def grade_pick(pick, games_for, now=None):
     """
     now = now or datetime.now(timezone.utc)
     league = pick.get("league") or "OTHER"
-    if league not in config.LEAGUES:
+    if league not in AUTO_GRADED_LEAGUES:
         return "manual", None, f"league {league} not covered", None
     kind = pick.get("bet_type")
     period = pick.get("period") or "full_game"
@@ -175,7 +177,7 @@ def grade_pick(pick, games_for, now=None):
         result = grade_bet(pick, game, side)
         if result is None:
             return None, None, note, info
-        odds = pick.get("odds") or config.DEFAULT_ODDS
+        odds = pick.get("odds") or default_odds
         net = units_net(result, odds, pick.get("units")) if result in ("win", "loss", "push") else None
         return result, net, note, info
 
@@ -188,7 +190,7 @@ def grade_pick(pick, games_for, now=None):
         outcomes, decimal, pending, manual, starts = [], 1.0, False, False, []
         for leg in legs:
             leg_league = (leg.get("league") or league).upper()
-            if (leg.get("bet_type") not in ("moneyline", "spread", "total") or leg_league not in config.LEAGUES
+            if (leg.get("bet_type") not in ("moneyline", "spread", "total") or leg_league not in AUTO_GRADED_LEAGUES
                     or (leg.get("period") or "full_game") != "full_game"):
                 manual = True
                 continue
@@ -203,7 +205,7 @@ def grade_pick(pick, games_for, now=None):
             else:
                 outcomes.append(r)
                 if r == "win":
-                    decimal *= american_to_decimal(leg.get("odds") or config.DEFAULT_ODDS)
+                    decimal *= american_to_decimal(leg.get("odds") or default_odds)
         # A parlay counts as posted in time only if it went out before its first leg started.
         info = None
         if starts:
@@ -250,30 +252,3 @@ def to_grader(p, posted_at=None):
                 lg["league"] = g["league"]
             g["legs"].append(lg)
     return g
-
-
-def grade_pending(db):
-    from . import store
-
-    def games_for(league, day):
-        try:
-            return get_games(league, day)
-        except Exception as e:
-            print(f"  could not load {league} scores for {day}: {e}")
-            return []
-
-    rows = store.pending_picks(db)
-    counts = {}
-    late = 0
-    for row in rows:
-        result, net, note, game = grade_pick(to_grader(row), games_for)
-        if game:
-            store.set_game(db, row["id"], game)
-            late += game.get("before_start") is False
-        if result is None:
-            continue
-        store.set_result(db, row["id"], result, net, note)
-        counts[result] = counts.get(result, 0) + 1
-    print(f"  graded {sum(counts.values())} of {len(rows)} pending picks {counts or ''}"
-          f"{f', {late} posted after the game started' if late else ''}")
-    return counts

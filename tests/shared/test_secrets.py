@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest import mock
 
-from tracker import config
+from xbots import config
 
 
 class FakeSecrets:

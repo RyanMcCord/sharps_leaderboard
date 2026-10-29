@@ -1,0 +1,25 @@
+name: Sharps leaderboard
+
+# Once a day: fetch new posts, read picks, grade finished games, then rebuild the
+# leaderboard page (docs/index.html) from the database.
+# 21:07 UTC is 5:07 PM Eastern during daylight saving time and 4:07 PM the rest of the
+# year: after the previous night's games are final, and before most of tonight's start.
+on:
+  schedule:
+    - cron: "7 21 * * *"
+  workflow_dispatch: {}   # adds a "Run workflow" button on the Actions tab
+
+concurrency:
+  group: bot-sharps-leaderboard
+  cancel-in-progress: false
+
+jobs:
+  run:
+    permissions:
+      contents: write   # commit the rebuilt page
+    uses: ./.github/workflows/run-bot.yml
+    with:
+      bot: sharps-leaderboard
+      command: all
+      publish: docs/index.html
+    secrets: inherit

@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest import mock
 
-from tracker.db import DataAPIDatabase, DatabaseError
+from xbots.adapters.database import DataAPIDatabase, DatabaseError
 
 
 class ResumingError(Exception):
@@ -44,7 +44,7 @@ class DataAPITests(unittest.TestCase):
 
     def test_waits_for_resume(self):
         c = FakeClient(fail_times=2)
-        with mock.patch("tracker.db.time.sleep") as sleep:
+        with mock.patch("xbots.adapters.database.time.sleep") as sleep:
             make(c).execute("SELECT 1")
         self.assertEqual(len(c.calls), 3)
         self.assertEqual(sleep.call_count, 2)
@@ -52,7 +52,7 @@ class DataAPITests(unittest.TestCase):
 
     def test_unavailable_while_waking_is_retried(self):
         c = FakeClient(fail_times=1, code="DatabaseUnavailableException")
-        with mock.patch("tracker.db.time.sleep"):
+        with mock.patch("xbots.adapters.database.time.sleep"):
             make(c).execute("SELECT 1")
         self.assertEqual(len(c.calls), 2)
 
@@ -61,7 +61,7 @@ class DataAPITests(unittest.TestCase):
                             ("AccessDeniedException", "policy"),
                             ("DatabaseNotFoundException", "writer instance")]:
             c = FakeClient(fail_times=1, code=code)
-            with mock.patch("tracker.db.time.sleep"), self.assertRaises(DatabaseError) as ctx:
+            with mock.patch("xbots.adapters.database.time.sleep"), self.assertRaises(DatabaseError) as ctx:
                 make(c).execute("SELECT 1")
             self.assertIn(words, str(ctx.exception))
             self.assertEqual(len(c.calls), 1)  # not retried
@@ -90,13 +90,13 @@ class DataAPITests(unittest.TestCase):
 
     def test_real_errors_are_not_retried(self):
         c = FakeClient(fail_times=1, code="BadRequestException")
-        with mock.patch("tracker.db.time.sleep"), self.assertRaises(DatabaseError):
+        with mock.patch("xbots.adapters.database.time.sleep"), self.assertRaises(DatabaseError):
             make(c).execute("SELEC 1")
         self.assertEqual(len(c.calls), 1)
 
     def test_gives_up_eventually(self):
         c = FakeClient(fail_times=99)
-        with mock.patch("tracker.db.time.sleep"), self.assertRaises(DatabaseError):
+        with mock.patch("xbots.adapters.database.time.sleep"), self.assertRaises(DatabaseError):
             make(c).execute("SELECT 1")
         self.assertEqual(len(c.calls), 8)
 

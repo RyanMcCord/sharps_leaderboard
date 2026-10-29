@@ -1,9 +1,19 @@
-"""Final scores from ESPN's public scoreboard JSON (unofficial, no key needed)."""
+"""ScoresProvider adapter: final scores from ESPN's public scoreboard JSON (unofficial, no key needed)."""
 import requests
 
-from . import config
+from ..ports import ScoresProvider
 
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/{path}/scoreboard"
+# League -> ESPN scoreboard path
+LEAGUES = {
+    "NFL": "football/nfl",
+    "NCAAF": "football/college-football",
+    "NBA": "basketball/nba",
+    "WNBA": "basketball/wnba",
+    "NCAAB": "basketball/mens-college-basketball",
+    "MLB": "baseball/mlb",
+    "NHL": "hockey/nhl",
+}
 # College scoreboards default to ranked teams only; these group IDs return all of D-I / FBS.
 EXTRA_PARAMS = {"NCAAF": {"groups": "80"}, "NCAAB": {"groups": "50"}}
 
@@ -36,18 +46,21 @@ def parse_scoreboard(data):
     return games
 
 
-_cache = {}
+class EspnScores(ScoresProvider):
+    """Each league/day is fetched once per run."""
 
+    def __init__(self, get=requests.get):
+        self._get = get
+        self._cache = {}
 
-def get_games(league, date_str):
-    """Games for a league on a YYYYMMDD date (fetched once per run)."""
-    path = config.LEAGUES.get(league)
-    if not path:
-        return []
-    key = (league, date_str)
-    if key not in _cache:
-        params = {"dates": date_str, "limit": 500, **EXTRA_PARAMS.get(league, {})}
-        r = requests.get(ESPN.format(path=path), params=params, timeout=30)
-        r.raise_for_status()
-        _cache[key] = parse_scoreboard(r.json())
-    return _cache[key]
+    def games(self, league, day):
+        path = LEAGUES.get(league)
+        if not path:
+            return []
+        key = (league, day)
+        if key not in self._cache:
+            params = {"dates": day, "limit": 500, **EXTRA_PARAMS.get(league, {})}
+            r = self._get(ESPN.format(path=path), params=params, timeout=30)
+            r.raise_for_status()
+            self._cache[key] = parse_scoreboard(r.json())
+        return self._cache[key]

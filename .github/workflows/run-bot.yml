@@ -1,23 +1,27 @@
-name: Daily update
+name: Run a bot
 
-# Once a day: wake the Aurora database, fetch new posts, read picks, grade finished
-# games, then rebuild the site from the database. Aurora pauses again afterwards.
-# 21:07 UTC is 5:07 PM Eastern during daylight saving time and 4:07 PM the rest of the
-# year: after the previous night's games are final, and before most of tonight's start.
+# Shared runner that every bot's workflow calls. It checks the code, runs the bot's
+# command, then commits whatever the bot published (e.g. its page under docs/).
 on:
-  schedule:
-    - cron: "7 21 * * *"
-  workflow_dispatch: {}   # adds a "Run workflow" button on the Actions tab
-
-permissions:
-  contents: write   # commit the rebuilt site
-
-concurrency:
-  group: daily-update
-  cancel-in-progress: false
+  workflow_call:
+    inputs:
+      bot:
+        description: Bot name, as listed in xbots/registry.py
+        required: true
+        type: string
+      command:
+        description: The bot command to run
+        required: false
+        type: string
+        default: all
+      publish:
+        description: Space-separated paths the bot writes that should be committed (optional)
+        required: false
+        type: string
+        default: ""
 
 jobs:
-  update:
+  run:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -31,7 +35,10 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
 
-      - name: Run the tracker
+      - name: Check the code
+        run: python -m unittest -q
+
+      - name: Run ${{ inputs.bot }}
         id: run
         continue-on-error: true   # still save whatever finished, then fail the job below
         # Keys come from the repo's GitHub secrets. The database has no password: the AWS
@@ -47,17 +54,18 @@ jobs:
           # Only used for a full-configuration cluster reached through the RDS Data API
           DB_CLUSTER_ARN: ${{ secrets.DB_CLUSTER_ARN }}
           DB_SECRET_ARN: ${{ secrets.DB_SECRET_ARN }}
-        run: python run.py all
+        run: python -m xbots ${{ inputs.bot }} ${{ inputs.command }}
 
       - name: Save results
+        if: inputs.publish != ''
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html   # the data itself lives in Aurora
+          git add ${{ inputs.publish }}
           if git diff --cached --quiet; then
             echo "Nothing changed."
           else
-            git commit -m "Daily update $(date -u +%Y-%m-%d)"
+            git commit -m "${{ inputs.bot }}: update $(date -u +%Y-%m-%d)"
             git pull --rebase origin main   # in case something else was pushed during the run
             git push
           fi
@@ -65,5 +73,5 @@ jobs:
       - name: Report a failed run
         if: steps.run.outcome == 'failure'
         run: |
-          echo "::error::Part of the tracker run failed. Open the 'Run the tracker' step above for the reason."
+          echo "::error::Part of the ${{ inputs.bot }} run failed. Open the 'Run ${{ inputs.bot }}' step above for the reason."
           exit 1

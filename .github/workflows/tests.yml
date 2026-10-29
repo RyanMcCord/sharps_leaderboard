@@ -1,0 +1,38 @@
+name: Tests
+
+# Every push and pull request: all tests, including the database ones against a
+# throwaway Postgres. No secrets or AWS needed.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**"]   # the bots' own page commits don't need a test run
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          PG_TEST_URL: postgresql://postgres:postgres@localhost:5432/postgres
+        run: python -m unittest -v

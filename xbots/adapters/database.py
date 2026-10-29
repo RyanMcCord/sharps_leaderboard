@@ -1,4 +1,4 @@
-"""Database connection.
+"""Database adapters for the SqlDatabase port (xbots/ports/database.py).
 
 Three ways to connect, picked by which settings are present:
   DB_HOST                          Aurora, signed in with a temporary IAM token (express clusters)
@@ -11,15 +11,15 @@ Everything talks to the database through two methods:
     db.execute(sql, params)  -> None
 
 SQL uses :name placeholders and explicit CAST(...) for uuid, timestamps, enums and
-jsonb, so the same statements work through the RDS Data API (production, Aurora)
-and through a direct Postgres connection (local development and tests).
+jsonb, so the same statements work through the RDS Data API and through a direct
+Postgres connection. Each bot keeps its tables in its own Postgres schema and
+creates them itself (see bots/<name>/adapters).
 """
 import json
 import time
 from datetime import date, datetime
 
-from . import config
-from .schema import SCHEMA
+from .. import config
 
 
 class DatabaseError(RuntimeError):
@@ -252,8 +252,3 @@ def connect():
     raise DatabaseError("No database configured. Set DB_HOST (Aurora with IAM sign-in), DB_CLUSTER_ARN and "
                         "DB_SECRET_ARN (Aurora through the Data API), or DATABASE_URL (any Postgres) "
                         "as GitHub secrets or in .env.")
-
-
-def ensure_schema(db):
-    for statement in SCHEMA:
-        db.execute(statement)

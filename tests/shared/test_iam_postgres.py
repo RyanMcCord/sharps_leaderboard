@@ -1,4 +1,4 @@
-"""The IAM-token connection (tracker.db.IamPostgresDatabase).
+"""The IAM-token connection (xbots.adapters.database.IamPostgresDatabase).
 
 psycopg and boto3 are replaced with fakes, so these run anywhere:
 - the fake boto3 records the sign-in token requests
@@ -17,7 +17,7 @@ import types
 import unittest
 from unittest import mock
 
-from tracker import db as dbmod
+from xbots.adapters import database as dbmod
 
 PSQL = os.getenv("PG_TEST_PSQL")
 HOST = "sharps-leaderboard.cluster-abc123xyz.us-east-2.rds.amazonaws.com"
@@ -121,7 +121,7 @@ class IamConnectionTests(unittest.TestCase):
         self.pg, self.rds = FakePsycopg(), FakeRds()
         self.patch = install(self.pg, self.rds)
         self.patch.start()
-        self.sleep = mock.patch("tracker.db.time.sleep")
+        self.sleep = mock.patch("xbots.adapters.database.time.sleep")
         self.sleep.start()
 
     def tearDown(self):
@@ -177,25 +177,22 @@ class IamConnectionTests(unittest.TestCase):
         self.assertEqual(db.conn.statements[-1], "SELECT 5, CAST('[1]' AS jsonb), 'abc' LIKE 'ab' || '%', '12:30'")
 
     def test_connect_picks_iam_when_db_host_is_set(self):
-        with mock.patch.multiple("tracker.config", DB_HOST=HOST, DB_PORT=5432, DB_USER="postgres",
+        with mock.patch.multiple("xbots.config", DB_HOST=HOST, DB_PORT=5432, DB_USER="postgres",
                                  DB_NAME="postgres", AWS_REGION="us-east-2"):
             self.assertIsInstance(dbmod.connect(), dbmod.IamPostgresDatabase)
 
 
 if PSQL:
-    from tests.test_postgres import PostgresTests
+    from tests.sharps_leaderboard.test_postgres_repository import PostgresTests
 
     class PostgresThroughIamTests(PostgresTests):
-        """The full Postgres suite again, through IamPostgresDatabase and psycopg-style placeholders."""
+        """The leaderboard's Postgres suite again, through IamPostgresDatabase and psycopg-style placeholders."""
 
         @classmethod
-        def setUpClass(cls):
+        def connect(cls):
             cls._patch = install(FakePsycopg(), FakeRds())
             cls._patch.start()
-            cls.db = dbmod.IamPostgresDatabase(HOST, 5432, "postgres", "postgres")
-            cls.db.execute("DROP SCHEMA public CASCADE")
-            cls.db.execute("CREATE SCHEMA public")
-            dbmod.ensure_schema(cls.db)
+            return dbmod.IamPostgresDatabase(HOST, 5432, "postgres", "postgres")
 
         @classmethod
         def tearDownClass(cls):
