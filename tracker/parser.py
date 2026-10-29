@@ -32,7 +32,10 @@ Rules:
   hockey "P1"/"1st period" -> first_period (etc.), MLB "F5"/"first 5 innings" -> first_five_innings.
   Put the period in bet_description too, e.g. "Chiefs 1H -3.5".
 - sport: the league, one of NFL, NCAAF, NBA, WNBA, NCAAB, MLB, NHL, or OTHER.
-- If a post has no picks, return an empty list."""
+- If a post has no picks, return an empty list.
+
+Always answer by calling the record_picks tool exactly once, even when there are no picks
+(then call it with an empty list). Don't reply in plain text."""
 
 PICK_PROPS = {
     "sport": {"type": "string", "enum": SPORTS},
@@ -116,12 +119,14 @@ def extract_picks(client, post):
         max_tokens=2000,
         system=SYSTEM,
         tools=[TOOL],
-        tool_choice={"type": "tool", "name": "record_picks"},
+        # Newer models don't accept a forced tool choice, so the instructions ask for the tool instead
+        tool_choice={"type": "auto"},
         messages=[{"role": "user", "content": content}],
     )
     for block in msg.content:
-        if block.type == "tool_use":
-            return [clean_pick(p) for p in block.input.get("picks", [])]
+        if getattr(block, "type", None) == "tool_use" and block.name == "record_picks":
+            return [clean_pick(p) for p in (block.input or {}).get("picks", [])]
+    # No tool call: the model answered in plain text instead. Treat it as "no picks found".
     return []
 
 

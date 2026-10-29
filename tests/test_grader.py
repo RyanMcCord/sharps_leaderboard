@@ -165,6 +165,41 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(page.count("</script>"), 2)  # post text can't close the data block early
 
 
+class FakeBlock:
+    def __init__(self, type, name=None, input=None, text=None):
+        self.type, self.name, self.input, self.text = type, name, input, text
+
+
+class FakeMessages:
+    def __init__(self, blocks):
+        self.blocks, self.calls = blocks, []
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        return type("Msg", (), {"content": self.blocks})()
+
+
+class ParserCallTests(unittest.TestCase):
+    POST = {"x_handle": "SharpPickss", "posted_at": POSTED, "text": "Lakers -4.5 (2u)", "media_urls": []}
+
+    def call(self, blocks):
+        from tracker.parser import extract_picks
+        msgs = FakeMessages(blocks)
+        client = type("Client", (), {"messages": msgs})()
+        return extract_picks(client, self.POST), msgs.calls[0]
+
+    def test_asks_for_the_tool_without_forcing_it(self):
+        picks, req = self.call([FakeBlock("text", text="Here you go."), FakeBlock(
+            "tool_use", "record_picks", {"picks": [{"sport": "NBA", "type": "spread", "team": "Lakers", "point": -4.5,
+                                                    "units": 2, "bet_description": "Lakers -4.5"}]})])
+        self.assertEqual(req["tool_choice"], {"type": "auto"})  # forced tool choice is rejected by newer models
+        self.assertEqual([(p["team"], p["point"], p["units"]) for p in picks], [("Lakers", -4.5, 2)])
+
+    def test_plain_text_answer_means_no_picks(self):
+        picks, _ = self.call([FakeBlock("text", text="No picks in this post.")])
+        self.assertEqual(picks, [])
+
+
 class PrefilterTests(unittest.TestCase):
     def post(self, text, media="[]"):
         return {"text": text, "media_urls": media}
