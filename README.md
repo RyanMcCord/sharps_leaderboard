@@ -78,7 +78,7 @@ The leaderboard is at `https://ryanmccord.github.io/sharps_leaderboard/`.
 - **"could not translate host name".** `DB_HOST` isn't the writer endpoint.
 - **"database ... does not exist".** `DB_NAME` should be `postgres`, or left out.
 
-X and Anthropic errors name the secret to check. The first database step can take an extra 15–30 seconds while the database wakes up. That's normal.
+X and Anthropic errors name the secret to check. **"client-not-enrolled"** from X means the X app isn't inside a Project or doesn't have pay-per-use billing set up. Fix both in the X developer console, then regenerate the Bearer Token. The first database step can take an extra 15–30 seconds while the database wakes up. That's normal.
 
 ### Using a full-configuration cluster instead
 

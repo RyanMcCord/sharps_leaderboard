@@ -33,6 +33,10 @@ def _get(path, params):
             continue
         if r.status_code == 402:
             raise XAPIError("X API says payment is required - add credits in the developer console.")
+        if r.status_code == 403 and "client-not-enrolled" in r.text:
+            raise XAPIError("X API says this app isn't enrolled (403 client-not-enrolled).\n"
+                            "    -> In the X developer console: put the app inside a Project, turn on pay-per-use "
+                            "billing with some credits, then regenerate the Bearer Token and update X_BEARER_TOKEN.")
         if r.status_code == 401:
             raise XAPIError("X API rejected the token (401). Check X_BEARER_TOKEN is the app's Bearer Token.")
         if not r.ok:
