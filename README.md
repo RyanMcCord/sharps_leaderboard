@@ -9,6 +9,7 @@ The repo started as the Sharps Leaderboard, which is still its first bot (and th
 | Bot | What it does | Runs | Docs |
 |---|---|---|---|
 | `sharps-leaderboard` | Grades the free picks betting tipsters post on X and publishes a [leaderboard](https://ryanmccord.github.io/sharps_leaderboard/) | Daily, 21:07 UTC | [bots/sharps_leaderboard](bots/sharps_leaderboard/README.md) |
+| `ai-art` | Posts the Midjourney images you drop in a Google Drive folder to X, with captions by Claude | Every 4 hours | [bots/ai_art](bots/ai_art/README.md) |
 
 ## How it's built
 
@@ -18,10 +19,10 @@ The code follows the [hexagonal architecture](https://docs.aws.amazon.com/prescr
               primary adapters                                   secondary adapters
         (things that drive a bot)                          (things a bot drives)
 
-   command line ─┐                                       ┌─ X API            (PostSource)
+   command line ─┐                                       ┌─ X API            (PostSource, PostPublisher)
   python -m xbots│     ┌───────────────────────────┐     ├─ Aurora/Postgres  (SqlDatabase, repositories)
-                 ├────▶│ application (use cases)   │────▶├─ Claude           (e.g. PickReader)
- GitHub Actions ─┘     │   ↓ uses                  │     ├─ ESPN             (e.g. ScoresProvider)
+                 ├────▶│ application (use cases)   │────▶├─ Claude           (e.g. PickReader, Captioner)
+ GitHub Actions ─┘     │   ↓ uses                  │     ├─ ESPN, Google Drive (e.g. ScoresProvider, ImageQueue)
    (schedules)         │ domain (business rules)   │     └─ static site      (e.g. SitePublisher)
                        └───────────────────────────┘
                           input port        output ports
@@ -31,28 +32,31 @@ The rules that keep it that way:
 
 - **Domain** (`bots/<bot>/domain/`) is plain logic: no network, database, files or settings. It's tested on its own.
 - **Application** (`bots/<bot>/application.py`) holds the use cases, and is the bot's input port. It depends only on ports, never on an adapter.
-- **Ports** are abstract classes. Shared ones live in `xbots/ports/`: reading posts, publishing posts, and a SQL database. A bot's own ports live in `bots/<bot>/ports.py`.
-- **Adapters** implement ports. Shared ones live in `xbots/adapters/` (X API, the three database connections, Claude). A bot's own adapters live in `bots/<bot>/adapters/`.
+- **Ports** are abstract classes. Shared ones live in `xbots/ports/`: reading posts, publishing posts (with images), preparing images, and a SQL database. A bot's own ports live in `bots/<bot>/ports.py`.
+- **Adapters** implement ports. Shared ones live in `xbots/adapters/` (X API, the three database connections, Claude, images). A bot's own adapters live in `bots/<bot>/adapters/`.
 - **Composition root** (`bots/<bot>/app.py`) is the only place that picks which adapter goes behind each port. Tests swap in in-memory adapters instead.
-- **Each bot owns its data.** Its tables live in its own Postgres schema (the leaderboard uses `sharps`), so bots share the database without clashing.
+- **Each bot owns its data.** Its tables live in its own Postgres schema (`sharps` for the leaderboard, `ai_art` for the art bot), so bots share the database without clashing.
 
 ```
 xbots/                     shared by every bot
-  core/                    shared domain objects: Post, XUser
-  ports/                   PostSource, PostPublisher, SqlDatabase
-  adapters/                x_api.py, database.py, claude.py
+  core/                    shared domain objects: Post, XUser, Media
+  ports/                   PostSource, PostPublisher, ImageProcessor, SqlDatabase
+  adapters/                x_api.py, database.py, claude.py, images.py
   config.py                shared settings (keys, database)
   registry.py              the list of bots
   cli.py                   python -m xbots <bot> <command>
 bots/
   sharps_leaderboard/      the first bot (see its README)
     domain/  ports.py  application.py  adapters/  app.py  cli.py  settings.py
+  ai_art/                  posts Midjourney images from Google Drive (see its README)
 tests/
   shared/                  the shared adapters
   sharps_leaderboard/      domain, use cases (in-memory), adapters, Postgres
+  ai_art/                  the same for the art bot
 .github/workflows/
   run-bot.yml              shared runner every bot's workflow calls
   sharps-leaderboard.yml   the leaderboard's schedule
+  ai-art.yml               the art bot's schedule
   tests.yml                all tests (with a real Postgres) on every push
 docs/                      what bots publish with GitHub Pages
 ```
@@ -168,7 +172,12 @@ python -m xbots sharps-leaderboard standings
 
 ## Posting to X
 
-No bot posts yet. The shared `PostPublisher` port is ready for it, and `XApiPostPublisher` is a placeholder that says so. Posting needs credentials for the bot's own X account, not the read-only bearer token: OAuth 1.0a keys and an access token, or OAuth 2.0 with the `tweet.write` scope. X also charges per post created. When a bot needs it, the work is to implement `XApiPostPublisher.publish`, add those credentials as secrets, and pass the publisher to the bot in its `app.py`.
+Bots post through the shared `PostPublisher` port. `XApiPostPublisher` implements it with images and alt text, signed with OAuth 1.0a. Posting needs more than the read-only bearer token:
+
+- **The app's keys.** `X_API_KEY` and `X_API_SECRET`, with the app's permissions set to **Read and write**.
+- **The posting account's own access token and secret.** Each posting bot has its own pair, so different bots can post from different accounts. `python -m xbots ai-art authorize` gets them for any account with a PIN: sign in to X as that account, open the link it prints, and type the PIN.
+
+`publish` raises `PostRejected` when nothing was posted, so the caller can safely retry. Any other error means X may have posted. X charges per post created, and much more when the post contains a link. The [ai-art README](bots/ai_art/README.md#2-let-your-x-app-post) walks through the setup.
 
 ## Tests
 

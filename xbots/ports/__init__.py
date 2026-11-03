@@ -1,4 +1,5 @@
 from .database import SqlDatabase
-from .posts import PostPublisher, PostSource
+from .images import ImageProcessor, UnusableImage
+from .posts import PostPublisher, PostRejected, PostSource
 
-__all__ = ["PostPublisher", "PostSource", "SqlDatabase"]
+__all__ = ["ImageProcessor", "PostPublisher", "PostRejected", "PostSource", "SqlDatabase", "UnusableImage"]

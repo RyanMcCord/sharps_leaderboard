@@ -1,3 +1,3 @@
-from .posts import Post, XUser
+from .posts import Media, Post, XUser
 
-__all__ = ["Post", "XUser"]
+__all__ = ["Media", "Post", "XUser"]

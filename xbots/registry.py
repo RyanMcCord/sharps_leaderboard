@@ -9,6 +9,7 @@ import importlib
 
 BOTS = {
     "sharps-leaderboard": "bots.sharps_leaderboard",
+    "ai-art": "bots.ai_art",
 }
 
 

@@ -15,6 +15,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # X API (read access)
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "")
+# X API app keys (the developer app's "API Key and Secret"). Posting also needs the posting
+# account's own access token and secret, which each posting bot reads in its own settings.
+X_API_KEY = os.getenv("X_API_KEY", "")
+X_API_SECRET = os.getenv("X_API_SECRET", "")
+# Google service account (the full JSON key), for bots that read from Google Drive
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
 # Claude
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "") or os.getenv("PARSER_MODEL", "") or "claude-sonnet-5-5"
@@ -32,7 +38,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 # Name or ARN of the AWS Secrets Manager secret holding the app's keys (see load_secrets)
 APP_SECRET_ID = os.getenv("APP_SECRET_ID", "")
-SECRET_KEYS = ("X_BEARER_TOKEN", "ANTHROPIC_API_KEY", "DB_HOST", "DB_CLUSTER_ARN", "DB_SECRET_ARN", "DB_NAME")
+SECRET_KEYS = ("X_BEARER_TOKEN", "X_API_KEY", "X_API_SECRET", "ANTHROPIC_API_KEY", "GOOGLE_SERVICE_ACCOUNT_JSON",
+               "DB_HOST", "DB_CLUSTER_ARN", "DB_SECRET_ARN", "DB_NAME")
 
 
 def load_secrets(client=None):

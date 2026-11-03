@@ -1,7 +1,8 @@
 """X API (v2) adapters for the PostSource and PostPublisher ports.
 
 Billing note: X charges per post returned (and per user returned on lookups), so callers
-ask only for posts newer than the last one they saw.
+ask only for posts newer than the last one they saw. Creating a post is charged per post,
+and a post containing a link costs much more than one without.
 """
 import time
 
@@ -9,7 +10,7 @@ import requests
 
 from .. import config
 from ..core import Post, XUser
-from ..ports import PostPublisher, PostSource
+from ..ports import PostPublisher, PostRejected, PostSource
 
 API = "https://api.x.com/2"
 
@@ -112,10 +113,136 @@ class XApiPostSource(PostSource):
         return deleted
 
 
-class XApiPostPublisher(PostPublisher):
-    """Not built yet. Posting needs user-context credentials for the bot's own X account
-    (OAuth 1.0a keys and access token, or OAuth 2.0 with the tweet.write scope), not the
-    read-only bearer token. See README "Posting to X"."""
+def _oauth1_header(method, url, api_key, api_secret, token, token_secret, **extra):
+    """An OAuth 1.0a Authorization header for one request. The body isn't signed: X's JSON and
+    multipart endpoints don't include it in the signature."""
+    from oauthlib.oauth1 import Client
+    client = Client(api_key, client_secret=api_secret, resource_owner_key=token,
+                    resource_owner_secret=token_secret, **extra)
+    _, headers, _ = client.sign(url, http_method=method)
+    return headers["Authorization"]
 
-    def publish(self, text, reply_to=None):
-        raise NotImplementedError("Posting to X isn't set up yet. See README, 'Posting to X'.")
+
+def _explain(r):
+    """A plain-language reason for a failed posting request."""
+    hints = {
+        401: "the tokens were rejected. Check X_API_KEY/X_API_SECRET and the bot account's access token and secret.",
+        402: "payment is required. Add credits in the X developer console.",
+        403: "X refused. The app needs 'Read and write' permission, and the access token must be generated after "
+             "that was set. Also check the account isn't locked or posting a duplicate.",
+        429: "rate limited. The next scheduled run will try again.",
+    }
+    return f"{r.status_code} from X: {hints.get(r.status_code, r.text[:300])}"
+
+
+class XApiPostPublisher(PostPublisher):
+    """Posts as one bot account, signed with OAuth 1.0a: the app's keys plus that account's
+    access token and secret (see `python -m xbots <bot> authorize` for getting them).
+
+    Images go up first through the v2 media endpoint, with alt text when given, then the
+    post is created with them attached.
+    """
+
+    MAX_IMAGES = 4
+
+    def __init__(self, access_token, access_secret, api_key=None, api_secret=None, http=None, log=print):
+        self.api_key = api_key or config.X_API_KEY
+        self.api_secret = api_secret or config.X_API_SECRET
+        self.token, self.token_secret = access_token, access_secret
+        self.http = http or requests
+        self.log = log
+
+    def _auth(self, method, url):
+        missing = [n for n, v in (("X_API_KEY", self.api_key), ("X_API_SECRET", self.api_secret),
+                                  ("access token", self.token), ("access token secret", self.token_secret)) if not v]
+        if missing:
+            raise PostRejected(f"Can't post: missing {', '.join(missing)}. See the bot's README for setting them up.")
+        return {"Authorization": _oauth1_header(method, url, self.api_key, self.api_secret,
+                                                self.token, self.token_secret)}
+
+    def _upload(self, media):
+        """Upload one image; returns its media id. Any failure here means nothing was posted."""
+        url = f"{API}/media/upload"
+        try:
+            r = self.http.post(url, headers=self._auth("POST", url), timeout=60,
+                               data={"media_category": "tweet_image", "media_type": media.mime_type},
+                               files={"media": ("image", media.data, media.mime_type)})
+        except requests.RequestException as e:
+            raise PostRejected(f"Image upload failed: {e}") from e
+        if not r.ok:
+            raise PostRejected(f"Image upload failed: {_explain(r)}")
+        media_id = str(((r.json() or {}).get("data") or {}).get("id") or "")
+        if not media_id:
+            raise PostRejected(f"Image upload returned no media id: {r.text[:300]}")
+        if media.alt_text:
+            self._set_alt_text(media_id, media.alt_text)
+        return media_id
+
+    def _set_alt_text(self, media_id, alt_text):
+        """Best effort: a post without alt text is better than no post."""
+        url = f"{API}/media/metadata"
+        try:
+            r = self.http.post(url, headers=self._auth("POST", url), timeout=30,
+                               json={"id": media_id, "metadata": {"alt_text": {"text": alt_text[:1000]}}})
+            if not r.ok:
+                self.log(f"  alt text not set ({_explain(r)}); posting without it")
+        except requests.RequestException as e:
+            self.log(f"  alt text not set ({e}); posting without it")
+
+    def publish(self, text, reply_to=None, media=()):
+        if len(media) > self.MAX_IMAGES:
+            raise PostRejected(f"X allows at most {self.MAX_IMAGES} images per post, got {len(media)}.")
+        media_ids = [self._upload(m) for m in media]
+        body = {"text": text}
+        if media_ids:
+            body["media"] = {"media_ids": media_ids}
+        if reply_to:
+            body["reply"] = {"in_reply_to_tweet_id": reply_to}
+        url = f"{API}/tweets"
+        try:
+            r = self.http.post(url, headers=self._auth("POST", url), json=body, timeout=30)
+        except requests.RequestException as e:
+            # No answer from X: the post may or may not have gone out. Not PostRejected on purpose.
+            raise XAPIError(f"No answer from X while posting ({e}). Check the account before posting again.") from e
+        if not r.ok:
+            raise PostRejected(f"Post rejected: {_explain(r)}")
+        return str(r.json()["data"]["id"])
+
+
+# --- getting a bot account's access token -------------------------------------------
+
+REQUEST_TOKEN_URL = "https://api.x.com/oauth/request_token"
+AUTHORIZE_URL = "https://api.x.com/oauth/authorize"
+ACCESS_TOKEN_URL = "https://api.x.com/oauth/access_token"
+
+
+def authorize_with_pin(ask=input, log=print, http=None, api_key=None, api_secret=None):
+    """Get an access token and secret for any X account, using the app's keys and a PIN.
+
+    Sign in to X as the bot account in your browser first, open the link this prints,
+    approve the app, and type the PIN X shows. Returns (access_token, access_secret, handle).
+    """
+    from urllib.parse import parse_qs
+    http = http or requests
+    key, secret = api_key or config.X_API_KEY, api_secret or config.X_API_SECRET
+    if not key or not secret:
+        raise XAPIError("Set X_API_KEY and X_API_SECRET (the developer app's API Key and Secret) first.")
+
+    header = _oauth1_header("POST", REQUEST_TOKEN_URL, key, secret, None, None, callback_uri="oob")
+    r = http.post(REQUEST_TOKEN_URL, headers={"Authorization": header}, timeout=30)
+    if not r.ok:
+        raise XAPIError(f"Couldn't start sign-in: {_explain(r)}")
+    started = {k: v[0] for k, v in parse_qs(r.text).items()}
+
+    log("1. In your browser, sign in to X as the BOT account (not your own).")
+    log(f"2. Open: {AUTHORIZE_URL}?oauth_token={started['oauth_token']}")
+    log("3. Click 'Authorize app', then type the PIN X shows you.")
+    pin = ask("PIN: ").strip()
+
+    header = _oauth1_header("POST", ACCESS_TOKEN_URL, key, secret, started["oauth_token"],
+                            started["oauth_token_secret"], verifier=pin)
+    r = http.post(ACCESS_TOKEN_URL, headers={"Authorization": header}, timeout=30)
+    if not r.ok:
+        raise XAPIError(f"Sign-in failed: {_explain(r)}")
+    done = {k: v[0] for k, v in parse_qs(r.text).items()}
+    return done["oauth_token"], done["oauth_token_secret"], done.get("screen_name", "")

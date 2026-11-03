@@ -1,7 +1,7 @@
 """Ports for talking to X. Bots depend on these interfaces, never on the X API directly."""
 from abc import ABC, abstractmethod
 
-from ..core import Post, XUser
+from ..core import Media, Post, XUser
 
 
 class PostSource(ABC):
@@ -25,9 +25,17 @@ class PostSource(ABC):
         (private or suspended accounts) are not reported as deleted."""
 
 
+class PostRejected(RuntimeError):
+    """X answered and refused, or the post failed before it was sent: nothing was posted, so
+    it's safe to try again. Any other error while posting may mean the post went out."""
+
+
 class PostPublisher(ABC):
-    """Publishing to X from a bot account. No bot posts yet; see README "Posting to X"."""
+    """Publishing to X from a bot account (needs that account's own user tokens)."""
 
     @abstractmethod
-    def publish(self, text: str, reply_to: str | None = None) -> str:
-        """Post text (optionally as a reply). Returns the new post's id."""
+    def publish(self, text: str, reply_to: str | None = None, media: tuple[Media, ...] = ()) -> str:
+        """Post text, optionally with up to four images and as a reply. Returns the new post's id.
+
+        Raises PostRejected when nothing was posted.
+        """

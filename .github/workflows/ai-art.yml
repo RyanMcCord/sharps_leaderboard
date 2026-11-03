@@ -1,0 +1,30 @@
+name: AI art
+
+# Every 4 hours: post the next image from the Google Drive queue, with a caption by Claude.
+# When the queue is empty the run says so and posts nothing.
+# GitHub may start scheduled runs some minutes late; minute 23 avoids the busy top of the hour.
+# Scheduled runs are off until the repo variable AI_ART_ENABLED is set to true (see
+# bots/ai_art/README.md); "Run workflow" works either way.
+on:
+  schedule:
+    - cron: "23 */4 * * *"
+  workflow_dispatch:      # adds a "Run workflow" button on the Actions tab
+    inputs:
+      command:
+        description: "post: post the next image now. preview: show it and its caption without posting. status: the queue"
+        type: choice
+        options: [post, preview, status]
+        default: post
+
+concurrency:
+  group: bot-ai-art
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: ${{ vars.AI_ART_ENABLED == 'true' || github.event_name == 'workflow_dispatch' }}
+    uses: ./.github/workflows/run-bot.yml
+    with:
+      bot: ai-art
+      command: ${{ inputs.command || 'post' }}
+    secrets: inherit
